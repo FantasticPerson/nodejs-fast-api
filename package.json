@@ -1,0 +1,20 @@
+{
+  "name": "node-magic-api",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Magic API inspired SQL-to-REST studio for MySQL and Oracle",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "test": "node --test tests/*.test.js",
+    "check": "node --check server/index.js && node --check public/js/main.js"
+  },
+  "optionalDependencies": {
+    "mysql2": "^3.24.6",
+    "oracledb": "^6.10.0"
+  }
+}

@@ -1,0 +1,157 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { Readable } from 'node:stream';
+import { fileURLToPath } from 'node:url';
+import { JsonStore } from '../server/store.js';
+import { SecretBox } from '../server/security/secret-box.js';
+import { DriverManager } from '../server/driver-manager.js';
+import { createApplication } from '../server/app.js';
+
+const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+
+async function createHarness(adminToken = '') {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'node-magic-app-'));
+  const store = await new JsonStore(path.join(dir, 'state.json')).init();
+  const secretBox = await SecretBox.create({ keyFile: path.join(dir, 'secret.bin') });
+  const config = {
+    rootDir,
+    publicDir: path.join(rootDir, 'public'),
+    managementPath: '/magic/api',
+    openapiPath: '/openapi',
+    adminToken,
+    openapiToken: '',
+    corsOrigin: '*',
+    maxBodyBytes: 2 * 1024 * 1024,
+    version: '1.0.0'
+  };
+  const app = createApplication({ config, store, secretBox, driverManager: new DriverManager() });
+  return { dir, store, secretBox, config, app };
+}
+
+function createRequest({ method = 'GET', url = '/', body, remoteAddress = '127.0.0.1', headers = {} } = {}) {
+  const stream = body === undefined ? Readable.from([]) : Readable.from([Buffer.from(body)]);
+  stream.method = method;
+  stream.url = url;
+  stream.headers = {
+    ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+    ...headers
+  };
+  stream.socket = { remoteAddress };
+  return stream;
+}
+
+async function invoke(handler, options) {
+  const req = createRequest(options);
+  const res = {
+    statusCode: 200,
+    headersSent: false,
+    headers: {},
+    body: '',
+    setHeader(key, value) {
+      this.headers[key.toLowerCase()] = String(value);
+    },
+    end(chunk = '') {
+      this.body = String(chunk);
+      this.headersSent = true;
+    }
+  };
+  await handler(req, res);
+  return res;
+}
+
+test('health endpoint is public and reports driver availability', async () => {
+  const harness = await createHarness();
+  const res = await invoke(harness.app.handler, { url: '/magic/api/health' });
+  assert.equal(res.statusCode, 200);
+  const payload = JSON.parse(res.body);
+  assert.equal(payload.ok, true);
+  assert.equal(payload.service, 'node-magic-api');
+  assert.equal(typeof payload.drivers.mysql, 'boolean');
+  await fs.rm(harness.dir, { recursive: true, force: true });
+});
+
+test('management API is limited to loopback when ADMIN_TOKEN is empty', async () => {
+  const harness = await createHarness();
+  const res = await invoke(harness.app.handler, {
+    url: '/magic/api/bootstrap',
+    remoteAddress: '192.168.1.20'
+  });
+  assert.equal(res.statusCode, 401);
+  const payload = JSON.parse(res.body);
+  assert.equal(payload.error.code, 'ADMIN_AUTH_REQUIRED');
+  await fs.rm(harness.dir, { recursive: true, force: true });
+});
+
+test('ADMIN_TOKEN protects the management API', async () => {
+  const harness = await createHarness('test-token');
+  const unauthorized = await invoke(harness.app.handler, { url: '/magic/api/bootstrap' });
+  assert.equal(unauthorized.statusCode, 401);
+  const authorized = await invoke(harness.app.handler, {
+    url: '/magic/api/bootstrap',
+    headers: { 'x-admin-token': 'test-token' }
+  });
+  assert.equal(authorized.statusCode, 200);
+  const payload = JSON.parse(authorized.body);
+  assert.equal(payload.ok, true);
+  assert.equal(payload.data.config.adminTokenRequired, true);
+  await fs.rm(harness.dir, { recursive: true, force: true });
+});
+
+test('console render validates templates without touching a real database', async () => {
+  const harness = await createHarness();
+  const now = new Date().toISOString();
+  await harness.store.mutate((state) => {
+    state.datasources.push({
+      id: 'ds_test',
+      name: 'test',
+      type: 'mysql',
+      host: '127.0.0.1',
+      port: 3306,
+      username: 'user',
+      passwordEnc: harness.secretBox.encrypt('secret'),
+      database: 'demo',
+      serviceName: '',
+      connectString: '',
+      schema: '',
+      createdAt: now,
+      updatedAt: now
+    });
+  });
+  const body = JSON.stringify({
+    datasourceId: 'ds_test',
+    sql: 'SELECT id FROM users WHERE id = #{id}',
+    params: [{ name: 'id', in: 'query', type: 'number' }],
+    values: { id: 1 }
+  });
+  const res = await invoke(harness.app.handler, {
+    method: 'POST',
+    url: '/magic/api/console/render',
+    body
+  });
+  assert.equal(res.statusCode, 200);
+  const payload = JSON.parse(res.body);
+  assert.equal(payload.ok, true);
+  assert.match(payload.data.sql, /WHERE id = \?/);
+  assert.deepEqual(payload.data.values, [1]);
+  assert.equal(payload.data.dialect, 'mysql');
+  await fs.rm(harness.dir, { recursive: true, force: true });
+});
+
+test('static UI and OpenAPI document are served', async () => {
+  const harness = await createHarness();
+  const page = await invoke(harness.app.handler, { url: '/' });
+  assert.equal(page.statusCode, 200);
+  assert.match(page.body, /Node Magic API Studio/);
+  assert.equal(page.headers['cache-control'], 'no-store');
+  const stylesheet = await invoke(harness.app.handler, { url: '/styles.css' });
+  assert.equal(stylesheet.statusCode, 200);
+  assert.equal(stylesheet.headers['cache-control'], 'no-store');
+  const spec = await invoke(harness.app.handler, { url: '/magic/api/openapi.json' });
+  assert.equal(spec.statusCode, 200);
+  const document = JSON.parse(spec.body);
+  assert.equal(document.openapi, '3.0.3');
+  await fs.rm(harness.dir, { recursive: true, force: true });
+});

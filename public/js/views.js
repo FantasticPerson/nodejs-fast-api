@@ -1,0 +1,666 @@
+import { state } from './state.js';
+import {
+  buildCurl,
+  buildTestValues,
+  datasourceName,
+  escapeHtml,
+  formatDate,
+  formatNumber,
+  methodClass,
+  runtimeUrl,
+  slugify,
+  timeAgo
+} from './ui.js';
+
+const ICONS = {
+  code: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 8-4 4 4 4M16 8l4 4-4 4M14 4l-4 16"/></svg>',
+  database: '<svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="5" rx="7" ry="3"/><path d="M5 5v7c0 1.7 3.1 3 7 3s7-1.3 7-3V5M5 12v7c0 1.7 3.1 3 7 3s7-1.3 7-3v-7"/></svg>',
+  activity: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l2-6 4 12 2-6h6"/></svg>',
+  book: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h9a4 4 0 0 1 4 4v12H9a4 4 0 0 1-4-4V4Z"/><path d="M5 16h13"/></svg>',
+  plus: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>',
+  key: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="15" r="4"/><path d="m11 12 8-8M15 8l2 2M17 6l2 2"/></svg>',
+  sun: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>',
+  moon: '<svg class="moon-glyph" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" stroke="none" d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79Z"/></svg>',
+  refresh: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 6.7M20 4v7h-7"/></svg>',
+  copy: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>',
+  trash: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"/></svg>',
+  edit: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4 11.5-11.5Z"/></svg>',
+  arrow: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>',
+  back: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12H5M11 6l-6 6 6 6"/></svg>',
+  close: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>',
+  table: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M9 10v10"/></svg>',
+  spark: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 1.5 5.5L19 10l-5.5 1.5L12 17l-1.5-5.5L5 10l5.5-1.5L12 3Z"/></svg>'
+};
+
+export function renderApp() {
+  return `<div class="shell">
+    ${renderSidebar()}
+    <main class="main">
+      ${renderTopbar()}
+      <section class="content">
+        ${renderCurrentView()}
+      </section>
+    </main>
+  </div>`;
+}
+
+export function renderModal() {
+  if (!state.modal) return '';
+  const modal = state.modal;
+  return `<div class="modal-backdrop" role="presentation">
+    <div class="modal ${modal.size === 'wide' ? 'modal-wide' : ''}" role="dialog" aria-modal="true" aria-label="${escapeHtml(modal.title || '对话框')}">
+      <div class="modal-head">
+        <div>
+          <span class="eyebrow">${escapeHtml(modal.eyebrow || 'WORKSPACE')}</span>
+          <h2>${escapeHtml(modal.title || '')}</h2>
+        </div>
+        <button class="icon-button" data-action="modal-close" aria-label="关闭">${ICONS.close}</button>
+      </div>
+      <div class="modal-body">${renderModalBody(modal)}</div>
+      ${renderModalFooter(modal)}
+    </div>
+  </div>`;
+}
+
+function renderSidebar() {
+  const activeView = state.view === 'editor' ? 'apis' : state.view;
+  const nav = [
+    ['apis', '接口', 'code'],
+    ['datasources', '数据源', 'database'],
+    ['logs', '调用日志', 'activity'],
+    ['docs', '接口文档', 'book']
+  ];
+  return `<aside class="sidebar">
+    <div class="brand">
+      <span class="brand-mark"><i></i><i></i><i></i></span>
+      <span class="brand-copy"><strong>Node Magic</strong><small>API Studio</small></span>
+    </div>
+    <button class="new-api-button" data-action="api-new">${ICONS.plus}<span>新建接口</span></button>
+    <nav class="side-nav">
+      ${nav
+        .map(
+          ([view, label, icon]) => `<button class="nav-item ${activeView === view ? 'active' : ''}" data-action="nav" data-view="${view}">
+            <span class="nav-icon">${ICONS[icon]}</span><span>${label}</span>
+          </button>`
+        )
+        .join('')}
+    </nav>
+    <div class="sidebar-foot">
+      <div class="driver-tile">
+        <span class="eyebrow">DRIVERS</span>
+        <div class="driver-row"><span>MySQL</span><span class="dot ${state.config.drivers?.mysql ? 'ok' : 'off'}"></span></div>
+        <div class="driver-row"><span>Oracle</span><span class="dot ${state.config.drivers?.oracle ? 'ok' : 'off'}"></span></div>
+      </div>
+      <span class="version">v${escapeHtml(state.config.version || '1.0.0')}</span>
+    </div>
+  </aside>`;
+}
+
+function renderTopbar() {
+  return `<header class="topbar">
+    <div class="topbar-left">
+      <span class="live-dot"></span>
+      <span>本地工作台</span>
+      <span class="slash">/</span>
+      <span class="muted">SQL in. REST out.</span>
+    </div>
+    <div class="topbar-actions">
+      <button class="ghost-button" data-action="refresh">${ICONS.refresh}<span>刷新</span></button>
+      <button class="ghost-button" data-action="token-open">${ICONS.key}<span>访问令牌</span></button>
+      <button class="icon-button theme-button" data-action="toggle-theme" aria-label="${state.theme === 'dark' ? '切换为浅色主题' : '切换为深色主题'}" title="${state.theme === 'dark' ? '切换为浅色主题' : '切换为深色主题'}">${state.theme === 'dark' ? ICONS.sun : ICONS.moon}</button>
+    </div>
+  </header>`;
+}
+
+function renderCurrentView() {
+  if (state.loading) return renderLoading();
+  if (state.authError) return renderAuthError();
+  if (state.error) return renderFatalError();
+  if (state.view === 'editor') return renderEditor();
+  if (state.view === 'datasources') return renderDatasources();
+  if (state.view === 'logs') return renderLogs();
+  if (state.view === 'docs') return renderDocs();
+  return renderApis();
+}
+
+function renderLoading() {
+  return `<div class="loading-view">
+    <div class="skeleton skeleton-title"></div>
+    <div class="skeleton-grid">
+      <div class="skeleton skeleton-card"></div>
+      <div class="skeleton skeleton-card"></div>
+      <div class="skeleton skeleton-card"></div>
+    </div>
+  </div>`;
+}
+
+function renderAuthError() {
+  return `<div class="state-panel">
+    <span class="state-icon">${ICONS.key}</span>
+    <span class="eyebrow">ACCESS CONTROL</span>
+    <h1>管理界面需要访问令牌</h1>
+    <p>${escapeHtml(state.authError)}</p>
+    <div class="state-actions">
+      <button class="primary-button" data-action="token-open">设置访问令牌</button>
+      <button class="ghost-button" data-action="retry-boot">重新连接</button>
+    </div>
+  </div>`;
+}
+
+function renderFatalError() {
+  return `<div class="state-panel">
+    <span class="state-icon">${ICONS.activity}</span>
+    <span class="eyebrow">CONNECTION</span>
+    <h1>服务暂时不可用</h1>
+    <p>${escapeHtml(state.error)}</p>
+    <button class="primary-button" data-action="retry-boot">重试</button>
+  </div>`;
+}
+
+function renderApis() {
+  const active = state.endpoints.filter((item) => item.enabled).length;
+  const calls = state.endpoints.reduce((sum, item) => sum + Number(item.callCount || 0), 0);
+  const noDatasource = state.datasources.length === 0;
+  return `<div class="view-head">
+    <div>
+      <span class="eyebrow">API WORKBENCH</span>
+      <h1>把 SQL 变成 HTTP 接口</h1>
+      <p>保存即生效，不需要 Controller、Service、DTO。绑定参数默认防注入。</p>
+    </div>
+    <div class="head-actions">
+      <button class="secondary-button" data-action="nav" data-view="datasources">${ICONS.database}<span>管理数据源</span></button>
+      <button class="primary-button" data-action="api-new">${ICONS.plus}<span>新建接口</span></button>
+    </div>
+  </div>
+  ${noDatasource ? renderOnboarding() : ''}
+  <div class="metric-grid">
+    <div class="metric-card accent"><span class="eyebrow">ENDPOINTS</span><strong>${formatNumber(state.endpoints.length)}</strong><small>${active} 个正在启用</small></div>
+    <div class="metric-card"><span class="eyebrow">DATASOURCES</span><strong>${formatNumber(state.datasources.length)}</strong><small>MySQL / Oracle</small></div>
+    <div class="metric-card"><span class="eyebrow">CALLS</span><strong>${formatNumber(calls)}</strong><small>累计调用次数</small></div>
+  </div>
+  <div class="list-toolbar">
+    <div>
+      <h2>接口列表</h2>
+      <span class="muted">${state.endpoints.length ? '点击任意接口继续编辑' : '还没有接口'}</span>
+    </div>
+    <div class="search-box">
+      <span>⌕</span>
+      <input id="api-search" placeholder="搜索名称、路径或方法" value="${escapeHtml(state.apiSearch)}" autocomplete="off">
+    </div>
+  </div>
+  ${state.endpoints.length ? renderEndpointList() : renderEmptyEndpoints()}`;
+}
+
+function renderOnboarding() {
+  return `<div class="notice notice-accent">
+    <div class="notice-icon">${ICONS.spark}</div>
+    <div>
+      <strong>先从数据源开始</strong>
+      <p>添加 MySQL 或 Oracle 连接后，可以浏览表结构并一键生成完整 CRUD 接口。</p>
+    </div>
+    <button class="secondary-button" data-action="ds-new">添加数据源</button>
+  </div>`;
+}
+
+function renderEndpointList() {
+  return `<div class="endpoint-list">
+    ${state.endpoints
+      .map((endpoint) => {
+        const fullPath = `${state.config.openapiPath}${endpoint.path === '/' ? '/' : endpoint.path}`;
+        const search = `${endpoint.name} ${endpoint.method} ${endpoint.path} ${datasourceName(endpoint.datasourceId)}`.toLowerCase();
+        return `<div class="endpoint-row" data-search="${escapeHtml(search)}">
+          <button class="endpoint-main" data-action="api-edit" data-id="${escapeHtml(endpoint.id)}">
+            <span class="method-badge ${methodClass(endpoint.method)}">${escapeHtml(endpoint.method)}</span>
+            <span class="endpoint-copy">
+              <span class="endpoint-name">${escapeHtml(endpoint.name)}</span>
+              <code class="endpoint-path">${escapeHtml(fullPath)}</code>
+            </span>
+          </button>
+          <div class="endpoint-meta">
+            <span class="meta-label">数据源</span>
+            <span>${escapeHtml(datasourceName(endpoint.datasourceId))}</span>
+          </div>
+          <div class="endpoint-meta endpoint-calls">
+            <span class="meta-label">调用</span>
+            <span>${formatNumber(endpoint.callCount)} <small>${escapeHtml(timeAgo(endpoint.lastCalledAt))}</small></span>
+          </div>
+          <div class="endpoint-actions">
+            <button class="status-switch ${endpoint.enabled ? 'on' : ''}" data-action="api-toggle" data-id="${escapeHtml(endpoint.id)}" aria-label="${endpoint.enabled ? '停用' : '启用'}">
+              <span></span><em>${endpoint.enabled ? '启用' : '停用'}</em>
+            </button>
+            <button class="icon-button" data-action="api-copy-curl" data-id="${escapeHtml(endpoint.id)}" aria-label="复制 cURL">${ICONS.copy}</button>
+            <button class="icon-button" data-action="api-edit" data-id="${escapeHtml(endpoint.id)}" aria-label="编辑">${ICONS.edit}</button>
+          </div>
+        </div>`;
+      })
+      .join('')}
+  </div>`;
+}
+
+function renderEmptyEndpoints() {
+  return `<div class="empty-state">
+    <div class="empty-art"><span></span><i></i><b></b></div>
+    <span class="eyebrow">START HERE</span>
+    <h2>第一个接口只差一段 SQL</h2>
+    <p>新建接口后，可以立即在页面里测试、预览渲染后的 SQL，并复制调用示例。</p>
+    <button class="primary-button" data-action="api-new">${ICONS.plus}<span>创建第一个接口</span></button>
+  </div>`;
+}
+
+function renderEditor() {
+  const editor = state.editor;
+  if (!editor) return '';
+  const fullUrl = runtimeUrl(editor.path || '/');
+  const hasDatasource = state.datasources.length > 0;
+  return `<div class="editor-head">
+    <button class="back-button" data-action="editor-back">${ICONS.back}<span>返回接口列表</span></button>
+    <div class="editor-title">
+      <span class="eyebrow">${editor.id ? 'EDIT ENDPOINT' : 'NEW ENDPOINT'}</span>
+      <h1>${escapeHtml(editor.name || '未命名接口')}</h1>
+      <code>${escapeHtml(fullUrl)}</code>
+    </div>
+    <div class="head-actions">
+      ${editor.id ? `<button class="danger-ghost-button" data-action="editor-delete">${ICONS.trash}<span>删除</span></button>` : ''}
+      <button class="primary-button" data-action="editor-save">${ICONS.arrow}<span>${editor.id ? '保存并启用' : '创建接口'}</span></button>
+    </div>
+  </div>
+  ${!hasDatasource ? `<div class="notice notice-warn"><div><strong>还没有数据源</strong><p>接口保存前需要先绑定一个 MySQL 或 Oracle 数据源。</p></div><button class="secondary-button" data-action="ds-new">添加数据源</button></div>` : ''}
+  <div class="editor-shell">
+    <div class="editor-main">
+      ${renderRouteCard(editor)}
+      ${renderSqlCard(editor)}
+      ${renderTestCard(editor)}
+    </div>
+    <aside class="editor-side">
+      ${renderParamsCard(editor)}
+      ${renderOptionsCard(editor)}
+      ${renderShareCard(editor, fullUrl)}
+    </aside>
+  </div>`;
+}
+
+function renderRouteCard(editor) {
+  return `<section class="editor-card">
+    <div class="card-head"><div><span class="eyebrow">ROUTE</span><h2>接口信息</h2></div><span class="card-note">保存后立即生效</span></div>
+    <div class="form-grid">
+      <label class="field field-span-2"><span>接口名称</span><input data-field="name" value="${escapeHtml(editor.name)}" placeholder="例如：查询用户列表"></label>
+      <label class="field"><span>请求方法</span>
+        <select data-field="method" data-rerender="1">
+          ${['GET', 'POST', 'PUT', 'PATCH', 'DELETE']
+            .map((method) => `<option value="${method}" ${editor.method === method ? 'selected' : ''}>${method}</option>`)
+            .join('')}
+        </select>
+      </label>
+      <label class="field"><span>接口路径</span><input data-field="path" value="${escapeHtml(editor.path)}" placeholder="/users/:id"></label>
+      <label class="field"><span>数据源</span>
+        <select data-field="datasourceId" data-rerender="1">
+          <option value="">选择数据源</option>
+          ${state.datasources
+            .map((datasource) => `<option value="${escapeHtml(datasource.id)}" ${editor.datasourceId === datasource.id ? 'selected' : ''}>${escapeHtml(datasource.name)} · ${datasource.type}</option>`)
+            .join('')}
+        </select>
+      </label>
+      <label class="field"><span>分组（可选）</span><input data-field="group" value="${escapeHtml(editor.group || '')}" placeholder="例如：用户中心"></label>
+      <label class="field field-span-2"><span>描述（可选）</span><textarea rows="2" data-field="description" placeholder="说明这个接口的用途、参数或返回结构">${escapeHtml(editor.description || '')}</textarea></label>
+    </div>
+  </section>`;
+}
+
+function renderSqlCard(editor) {
+  const lineCount = String(editor.sql || '').split('\n').length;
+  const gutter = Array.from({ length: Math.max(1, lineCount) }, (_, index) => index + 1).join('\n');
+  return `<section class="editor-card sql-card">
+    <div class="card-head">
+      <div><span class="eyebrow">SQL TEMPLATE</span><h2>SQL 模板</h2></div>
+      <div class="snippet-bar">
+        <button data-action="editor-insert" data-snippet="#{name}"># 绑定</button>
+        <button data-action="editor-insert" data-snippet="<if test=&quot;name != null and name != ''&quot;>\n  AND column_name = #{name}\n</if>">&lt;if&gt;</button>
+        <button data-action="editor-insert" data-snippet="<foreach collection=&quot;ids&quot; item=&quot;id&quot; separator=&quot;,&quot;>\n  #{id}\n</foreach>">&lt;foreach&gt;</button>
+      </div>
+    </div>
+    <div class="code-shell">
+      <pre class="code-gutter" id="sql-gutter">${gutter}</pre>
+      <textarea id="sql-input" class="code-input" data-field="sql" spellcheck="false" autocomplete="off">${escapeHtml(editor.sql)}</textarea>
+    </div>
+    <div class="code-help">
+      <span><b>#{name}</b> 安全绑定参数</span>
+      <span><b>${'${'}name}</b> 原样拼接，需在右侧开启</span>
+      <span><b>&lt;if&gt;</b> / <b>&lt;foreach&gt;</b> 动态 SQL</span>
+    </div>
+  </section>`;
+}
+
+function renderParamsCard(editor) {
+  return `<section class="editor-card">
+    <div class="card-head compact">
+      <div><span class="eyebrow">PARAMETERS</span><h2>请求参数</h2></div>
+      <div class="mini-actions">
+        <button class="tiny-button" data-action="editor-extract-params">从 SQL 提取</button>
+        <button class="tiny-button" data-action="editor-add-param">${ICONS.plus}</button>
+      </div>
+    </div>
+    <div class="param-list">
+      ${(editor.params || []).length ? editor.params.map(renderParamRow).join('') : '<div class="param-empty">没有显式参数。未声明变量会从 body、query、path 中自动查找。</div>'}
+    </div>
+    <div class="param-legend"><span>位置</span><span>query / body / path / header</span></div>
+  </section>`;
+}
+
+function renderParamRow(param, index) {
+  return `<div class="param-row">
+    <div class="param-row-head">
+      <input data-param-index="${index}" data-param-field="name" value="${escapeHtml(param.name)}" placeholder="参数名">
+      <button class="icon-button param-remove" data-action="editor-remove-param" data-index="${index}" aria-label="删除参数">${ICONS.close}</button>
+    </div>
+    <div class="param-row-grid">
+      <label><span>位置</span><select data-param-index="${index}" data-param-field="in" data-param-rerender="1">
+        ${['query', 'body', 'path', 'header'].map((location) => `<option value="${location}" ${param.in === location ? 'selected' : ''}>${location}</option>`).join('')}
+      </select></label>
+      <label><span>类型</span><select data-param-index="${index}" data-param-field="type" data-param-rerender="1">
+        ${['string', 'number', 'boolean', 'date', 'json', 'array'].map((type) => `<option value="${type}" ${param.type === type ? 'selected' : ''}>${type}</option>`).join('')}
+      </select></label>
+      <label><span>默认值</span><input data-param-index="${index}" data-param-field="defaultValue" value="${escapeHtml(param.defaultValue ?? '')}" placeholder="空"></label>
+      <label class="check-label"><input type="checkbox" data-param-index="${index}" data-param-field="required" data-param-rerender="1" ${param.required ? 'checked' : ''}><span>必填</span></label>
+    </div>
+  </div>`;
+}
+
+function renderOptionsCard(editor) {
+  return `<section class="editor-card">
+    <div class="card-head compact"><div><span class="eyebrow">BEHAVIOUR</span><h2>接口选项</h2></div></div>
+    <div class="toggle-list">
+      <div class="toggle-row">
+        <div><strong>自动分页</strong><small>SELECT 语句会增加 count 查询与分页片段</small></div>
+        <label class="switch"><input type="checkbox" data-field="pageEnabled" data-rerender="1" ${editor.pagination?.enabled ? 'checked' : ''}><span></span></label>
+      </div>
+      ${editor.pagination?.enabled ? `<label class="field compact-field"><span>最大每页条数</span><input type="number" min="1" max="5000" data-field="pageMax" value="${escapeHtml(editor.pagination.maxPageSize || 100)}"></label>` : ''}
+      <div class="toggle-row">
+        <div><strong>允许原样 SQL</strong><small class="danger-text">开启后 ${'${'}name} 会直接拼接，存在注入风险</small></div>
+        <label class="switch"><input type="checkbox" data-field="allowRawSql" data-rerender="1" ${editor.allowRawSql ? 'checked' : ''}><span></span></label>
+      </div>
+      <label class="field compact-field"><span>响应模式</span>
+        <select data-field="responseMode" data-rerender="1">
+          <option value="wrap" ${editor.responseMode !== 'raw' ? 'selected' : ''}>统一包装 { code, message, data }</option>
+          <option value="raw" ${editor.responseMode === 'raw' ? 'selected' : ''}>直接返回 data</option>
+        </select>
+      </label>
+      <div class="toggle-row">
+        <div><strong>启用状态</strong><small>关闭后运行时会返回 404</small></div>
+        <label class="switch"><input type="checkbox" data-field="enabled" data-rerender="1" ${editor.enabled ? 'checked' : ''}><span></span></label>
+      </div>
+    </div>
+  </section>`;
+}
+
+function renderTestCard(editor) {
+  return `<section class="editor-card">
+    <div class="card-head">
+      <div><span class="eyebrow">PLAYGROUND</span><h2>在线调试</h2></div>
+      <div class="mini-actions">
+        <button class="tiny-button" data-action="editor-render">预览 SQL</button>
+        <button class="accent-button" data-action="editor-run">运行接口</button>
+      </div>
+    </div>
+    <div class="test-grid">
+      <label class="field"><span>测试参数 JSON</span><textarea id="test-values" rows="9" spellcheck="false" data-role="test-values">${escapeHtml(editor.testValues || '{}')}</textarea></label>
+      <div class="test-side">
+        <div class="two-fields">
+          <label class="field"><span>页码</span><input type="number" min="1" data-field="testPage" value="${escapeHtml(editor.testPage || 1)}"></label>
+          <label class="field"><span>每页</span><input type="number" min="1" data-field="testPageSize" value="${escapeHtml(editor.testPageSize || 20)}"></label>
+        </div>
+        <div class="test-hint">
+          <strong>快捷键</strong>
+          <span><kbd>⌘</kbd> + <kbd>Enter</kbd> 运行</span>
+        </div>
+      </div>
+    </div>
+    ${editor.renderResponse ? `<div class="output-block"><div class="output-head"><span>渲染后的 SQL</span><button data-action="editor-copy-render">${ICONS.copy}</button></div><pre>${escapeHtml(JSON.stringify(editor.renderResponse, null, 2))}</pre></div>` : ''}
+    ${editor.testResponse ? `<div class="output-block"><div class="output-head"><span>接口返回</span><button data-action="editor-copy-result">${ICONS.copy}</button></div><pre>${escapeHtml(JSON.stringify(editor.testResponse, null, 2))}</pre></div>` : ''}
+    ${!editor.renderResponse && !editor.testResponse ? '<div class="output-empty">点击“预览 SQL”查看绑定结果，点击“运行接口”执行真实查询。</div>' : ''}
+  </section>`;
+}
+
+function renderShareCard(editor, fullUrl) {
+  const curl = buildCurl(editor);
+  return `<section class="editor-card">
+    <div class="card-head compact"><div><span class="eyebrow">CALL IT</span><h2>调用示例</h2></div></div>
+    <div class="url-box"><code>${escapeHtml(fullUrl)}</code><button class="icon-button" data-action="editor-copy-url" aria-label="复制地址">${ICONS.copy}</button></div>
+    <div class="curl-block"><pre>${escapeHtml(curl)}</pre><button class="tiny-button" data-action="editor-copy-curl">复制 cURL</button></div>
+  </section>`;
+}
+
+function renderDatasources() {
+  const missing = [];
+  if (!state.config.drivers?.mysql) missing.push('mysql2');
+  if (!state.config.drivers?.oracle) missing.push('oracledb');
+  return `<div class="view-head">
+    <div><span class="eyebrow">CONNECTIONS</span><h1>数据源</h1><p>密码使用 AES-256-GCM 加密保存在本地状态文件中，不会出现在接口响应里。</p></div>
+    <div class="head-actions"><button class="primary-button" data-action="ds-new">${ICONS.plus}<span>添加数据源</span></button></div>
+  </div>
+  ${missing.length ? `<div class="notice notice-warn"><div><strong>数据库驱动未安装</strong><p>管理页可以正常使用，但连接数据库前需安装：${missing.map((item) => `<code>npm install ${item}</code>`).join(' ')}</p></div></div>` : ''}
+  ${state.datasources.length ? `<div class="datasource-grid">${state.datasources.map(renderDatasourceCard).join('')}</div>` : renderEmptyDatasources()}`;
+}
+
+function renderDatasourceCard(datasource) {
+  const target = datasource.type === 'oracle'
+    ? (datasource.connectString || `${datasource.host}:${datasource.port}/${datasource.serviceName}`)
+    : `${datasource.host}:${datasource.port}/${datasource.database}`;
+  return `<article class="datasource-card">
+    <div class="ds-card-head">
+      <span class="db-type ${datasource.type}"><i></i>${datasource.type.toUpperCase()}</span>
+      <span class="endpoint-count">${formatNumber(datasource.endpointCount)} 个接口</span>
+    </div>
+    <h2>${escapeHtml(datasource.name)}</h2>
+    <code class="ds-target">${escapeHtml(target)}</code>
+    <div class="ds-meta-grid">
+      <div><span>用户</span><strong>${escapeHtml(datasource.username)}</strong></div>
+      <div><span>${datasource.type === 'oracle' ? 'Schema' : '数据库'}</span><strong>${escapeHtml(datasource.type === 'oracle' ? datasource.schema || '默认' : datasource.database)}</strong></div>
+      <div><span>密码</span><strong>${datasource.hasPassword ? '已加密保存' : '未设置'}</strong></div>
+      <div><span>更新</span><strong>${escapeHtml(formatDate(datasource.updatedAt))}</strong></div>
+    </div>
+    <div class="ds-actions">
+      <button class="secondary-button" data-action="ds-tables" data-id="${escapeHtml(datasource.id)}">${ICONS.table}<span>浏览表</span></button>
+      <button class="ghost-button" data-action="ds-test" data-id="${escapeHtml(datasource.id)}">测试连接</button>
+      <button class="icon-button" data-action="ds-edit" data-id="${escapeHtml(datasource.id)}" aria-label="编辑">${ICONS.edit}</button>
+      <button class="icon-button danger" data-action="ds-delete" data-id="${escapeHtml(datasource.id)}" aria-label="删除">${ICONS.trash}</button>
+    </div>
+  </article>`;
+}
+
+function renderEmptyDatasources() {
+  return `<div class="empty-state">
+    <div class="empty-art database-art"><span></span><i></i><b></b></div>
+    <span class="eyebrow">CONNECT</span>
+    <h2>连接你的 MySQL 或 Oracle</h2>
+    <p>一个数据源可以被多个接口复用。添加后就能浏览表并生成 CRUD。</p>
+    <button class="primary-button" data-action="ds-new">${ICONS.plus}<span>添加第一个数据源</span></button>
+  </div>`;
+}
+
+function renderLogs() {
+  return `<div class="view-head">
+    <div><span class="eyebrow">REQUEST TRACE</span><h1>调用日志</h1><p>日志保存在内存中，最多 200 条；不会记录请求体和任何密钥。</p></div>
+    <div class="head-actions">
+      <button class="ghost-button" data-action="logs-clear">${ICONS.trash}<span>清空日志</span></button>
+      <button class="secondary-button" data-action="logs-refresh">${ICONS.refresh}<span>刷新</span></button>
+    </div>
+  </div>
+  ${state.logs.length ? `<div class="log-table">
+    <div class="log-head"><span>时间</span><span>接口</span><span>状态</span><span>耗时</span><span>来源</span><span>错误</span></div>
+    ${state.logs.map((log) => `<div class="log-row">
+      <span class="log-time">${escapeHtml(formatDate(log.timestamp))}</span>
+      <span class="log-endpoint"><span class="method-badge mini ${methodClass(log.method)}">${escapeHtml(log.method)}</span><code>${escapeHtml(log.path)}</code></span>
+      <span><span class="status-code ${Number(log.status) >= 400 ? 'bad' : 'good'}">${escapeHtml(log.status)}</span></span>
+      <span>${escapeHtml(log.durationMs)} ms</span>
+      <span class="muted">${escapeHtml(log.sourceIp || '—')}</span>
+      <span class="log-error">${escapeHtml(log.error || '—')}</span>
+    </div>`).join('')}
+  </div>` : '<div class="empty-state small"><span class="eyebrow">NO CALLS YET</span><h2>还没有调用记录</h2><p>运行任意接口后，这里会出现方法、状态、耗时和错误信息。</p></div>'}`;
+}
+
+function renderDocs() {
+  const enabled = state.endpoints.filter((item) => item.enabled);
+  const specUrl = `${location.origin}/magic/api/openapi.json`;
+  return `<div class="view-head">
+    <div><span class="eyebrow">API REFERENCE</span><h1>接口文档</h1><p>由已启用的接口自动生成；OpenAPI JSON 可直接接入 Swagger UI 或其他文档工具。</p></div>
+    <div class="head-actions"><button class="secondary-button" data-action="copy-openapi-url">${ICONS.copy}<span>复制 OpenAPI 地址</span></button></div>
+  </div>
+  <div class="doc-hero">
+    <div><span class="eyebrow">OPENAPI 3.0</span><h2>${escapeHtml(specUrl)}</h2><p>${state.config.openapiTokenRequired ? '访问文档需管理令牌，运行接口需 x-api-token。' : '运行接口未配置额外 token。'}</p></div>
+    <span class="doc-count">${formatNumber(enabled.length)} <small>OPERATIONS</small></span>
+  </div>
+  ${enabled.length ? `<div class="doc-list">${enabled.map(renderDocEndpoint).join('')}</div>` : '<div class="empty-state small"><span class="eyebrow">NO ENABLED ENDPOINTS</span><h2>还没有启用中的接口</h2><p>创建并启用接口后，文档会自动出现在这里。</p></div>'}`;
+}
+
+function renderDocEndpoint(endpoint) {
+  const fullPath = `${state.config.openapiPath}${endpoint.path === '/' ? '/' : endpoint.path}`;
+  const curl = buildCurl(endpoint);
+  return `<article class="doc-card">
+    <div class="doc-card-head">
+      <span class="method-badge ${methodClass(endpoint.method)}">${escapeHtml(endpoint.method)}</span>
+      <div><h2>${escapeHtml(endpoint.name)}</h2><code>${escapeHtml(fullPath)}</code></div>
+      <button class="tiny-button" data-action="doc-copy-curl" data-id="${escapeHtml(endpoint.id)}">复制 cURL</button>
+    </div>
+    ${endpoint.description ? `<p class="doc-description">${escapeHtml(endpoint.description)}</p>` : ''}
+    <div class="doc-detail-grid">
+      <div>
+        <span class="eyebrow">PARAMETERS</span>
+        ${(endpoint.params || []).length ? `<div class="doc-params">${endpoint.params.map((param) => `<div><span class="param-location">${escapeHtml(param.in)}</span><code>${escapeHtml(param.name)}</code><span>${escapeHtml(param.type)}${param.required ? ' · 必填' : ''}</span></div>`).join('')}</div>` : '<p class="muted">无显式参数</p>'}
+        ${endpoint.pagination?.enabled ? '<p class="doc-paging">分页参数：<code>page</code>、<code>pageSize</code>（最大 ' + escapeHtml(endpoint.pagination.maxPageSize) + '）</p>' : ''}
+      </div>
+      <div><span class="eyebrow">CURL</span><pre class="doc-curl">${escapeHtml(curl)}</pre></div>
+    </div>
+  </article>`;
+}
+
+function renderModalBody(modal) {
+  if (modal.type === 'datasource') return renderDatasourceModal(modal);
+  if (modal.type === 'tables') return renderTablesModal(modal);
+  if (modal.type === 'generator') return renderGeneratorModal(modal);
+  if (modal.type === 'token') return renderTokenModal(modal);
+  if (modal.type === 'confirm') return renderConfirmModal(modal);
+  return '';
+}
+
+function renderModalFooter(modal) {
+  if (modal.type === 'datasource') {
+    return `<div class="modal-foot"><div id="ds-test-result" class="test-result"></div><div class="modal-foot-actions">
+      <button class="ghost-button" data-action="modal-close">取消</button>
+      <button class="secondary-button" data-action="ds-test-draft">测试连接</button>
+      <button class="primary-button" data-action="ds-save">保存数据源</button>
+    </div></div>`;
+  }
+  if (modal.type === 'token') {
+    return `<div class="modal-foot"><div></div><div class="modal-foot-actions"><button class="ghost-button" data-action="modal-close">取消</button><button class="primary-button" data-action="token-save">保存令牌</button></div></div>`;
+  }
+  if (modal.type === 'confirm') {
+    return `<div class="modal-foot"><div></div><div class="modal-foot-actions"><button class="ghost-button" data-action="modal-close">取消</button><button class="${modal.danger ? 'danger-button' : 'primary-button'}" data-action="confirm-accept">${escapeHtml(modal.confirmLabel || '确认')}</button></div></div>`;
+  }
+  if (modal.type === 'generator') {
+    return `<div class="modal-foot"><div class="muted">生成后接口立即可用，路径冲突会中止整批创建。</div><div class="modal-foot-actions"><button class="ghost-button" data-action="modal-close">取消</button><button class="primary-button" data-action="crud-generate">生成接口</button></div></div>`;
+  }
+  return '';
+}
+
+function renderDatasourceModal(modal) {
+  const ds = modal.data?.datasource || {};
+  return `<div class="modal-intro">支持 MySQL 与 Oracle。Oracle 需要服务名 / SID，或填写完整连接字符串；Oracle 11g 还需配置 Thick 模式与 Oracle Client 库。</div>
+  <form id="datasource-form" class="modal-form">
+    <div class="form-grid">
+      <label class="field field-span-2"><span>名称</span><input name="name" value="${escapeHtml(ds.name || '')}" placeholder="例如：生产用户库" required></label>
+      <label class="field"><span>类型</span><select name="type" id="ds-type">
+        <option value="mysql" ${ds.type !== 'oracle' ? 'selected' : ''}>MySQL</option>
+        <option value="oracle" ${ds.type === 'oracle' ? 'selected' : ''}>Oracle</option>
+      </select></label>
+      <label class="field"><span>主机</span><input name="host" value="${escapeHtml(ds.host || '127.0.0.1')}" placeholder="127.0.0.1"></label>
+      <label class="field"><span>端口</span><input name="port" type="number" value="${escapeHtml(ds.port || '')}" placeholder="3306 / 1521"></label>
+      <label class="field"><span>MySQL 数据库</span><input name="database" value="${escapeHtml(ds.database || '')}" placeholder="database_name"></label>
+      <label class="field"><span>Oracle 服务名 / SID</span><input name="serviceName" value="${escapeHtml(ds.serviceName || '')}" placeholder="ORCL"></label>
+      <label class="field"><span>Oracle Schema（可选）</span><input name="schema" value="${escapeHtml(ds.schema || '')}" placeholder="默认使用用户名"></label>
+      <label class="field field-span-2"><span>Oracle 连接字符串（可选，覆盖主机配置）</span><input name="connectString" value="${escapeHtml(ds.connectString || '')}" placeholder="host:port/service_name"></label>
+      <label class="field"><span>用户名</span><input name="username" value="${escapeHtml(ds.username || '')}" placeholder="db_user"></label>
+      <label class="field"><span>密码</span><input name="password" type="password" value="" placeholder="${ds.id && ds.hasPassword ? '留空则保持原密码' : '数据库密码'}"></label>
+    </div>
+  </form>`;
+}
+
+function renderTablesModal(modal) {
+  const data = modal.data || {};
+  if (data.loading) return `<div class="modal-loading"><span class="spinner"></span><p>正在读取表结构…</p></div>`;
+  if (data.error) return `<div class="notice notice-warn"><div><strong>读取失败</strong><p>${escapeHtml(data.error)}</p></div></div>`;
+  const tables = data.tables || [];
+  return `<div class="table-browser">
+    <div class="table-browser-left">
+      <div class="browser-search"><input id="table-search" placeholder="搜索表名" autocomplete="off"></div>
+      <div class="table-list" id="table-list">
+        ${tables.map((table) => `<button class="table-item ${data.selectedTable === table.name ? 'active' : ''}" data-action="table-select" data-table="${escapeHtml(table.name)}" data-table-name="${escapeHtml(table.name.toLowerCase())}">
+          <span>${ICONS.table}</span><div><strong>${escapeHtml(table.name)}</strong><small>${escapeHtml(table.type)}${table.comment ? ' · ' + escapeHtml(table.comment) : ''}</small></div>
+        </button>`).join('')}
+      </div>
+      <span class="table-count">${formatNumber(tables.length)} 张表 / 视图</span>
+    </div>
+    <div class="table-browser-right">
+      ${data.columnsLoading ? '<div class="modal-loading"><span class="spinner"></span><p>正在读取字段…</p></div>' : data.tableInfo ? renderTableInfo(data.tableInfo) : '<div class="browser-empty">从左侧选择一张表，查看字段和主键。</div>'}
+    </div>
+  </div>`;
+}
+
+function renderTableInfo(table) {
+  return `<div class="table-info-head">
+    <div><span class="eyebrow">TABLE</span><h3>${escapeHtml(table.name)}</h3><p>${escapeHtml(table.schema || '')}</p></div>
+    <button class="primary-button" data-action="crud-open"><span>${ICONS.spark}</span>生成 CRUD</button>
+  </div>
+  <div class="pk-strip"><span>主键</span>${table.primaryKeys?.length ? table.primaryKeys.map((pk) => `<code>${escapeHtml(pk)}</code>`).join('') : '<em>无主键</em>'}</div>
+  <div class="column-table">
+    <div class="column-head"><span>字段</span><span>类型</span><span>可空</span><span>默认</span><span>标记</span></div>
+    ${table.columns.map((column) => `<div class="column-row">
+      <code>${escapeHtml(column.name)}</code>
+      <span>${escapeHtml(column.dataType)}</span>
+      <span>${column.nullable ? '是' : '否'}</span>
+      <span class="column-default">${escapeHtml(column.defaultValue ?? '—')}</span>
+      <span class="column-marks">${column.primaryKey ? '<b class="tag pk">PK</b>' : ''}${column.autoIncrement ? '<b class="tag auto">AUTO</b>' : ''}</span>
+    </div>`).join('')}
+  </div>`;
+}
+
+function renderGeneratorModal(modal) {
+  const data = modal.data || {};
+  const table = data.tableInfo;
+  if (!table) return '<div class="modal-loading"><span class="spinner"></span><p>读取表信息…</p></div>';
+  const hasPk = table.primaryKeys?.length === 1;
+  const preview = data.preview?.endpoints || [];
+  return `<div class="modal-intro">为 <code>${escapeHtml(table.schema ? table.schema + '.' + table.name : table.name)}</code> 生成标准 REST 接口。${!hasPk ? '<b class="danger-text">该表没有单列主键，只能生成列表和新增。</b>' : ''}</div>
+  <div class="form-grid">
+    <label class="field field-span-2"><span>路径前缀</span><input id="crud-path-base" value="${escapeHtml(data.pathBase || '/')}" placeholder="/users"></label>
+    <div class="field field-span-2"><span>生成方法</span><div class="method-checks">
+      ${[
+        ['list', '列表 GET'],
+        ['get', '详情 GET'],
+        ['create', '新增 POST'],
+        ['update', '更新 PUT'],
+        ['delete', '删除 DELETE']
+      ].map(([key, label]) => {
+        const needsPk = ['get', 'update', 'delete'].includes(key);
+        const disabled = needsPk && !hasPk;
+        const checked = (data.methods || []).includes(key) && !disabled;
+        return `<label class="method-check ${disabled ? 'disabled' : ''}"><input type="checkbox" name="crud-method" value="${key}" ${checked ? 'checked' : ''} ${disabled ? 'disabled' : ''}><span>${label}</span></label>`;
+      }).join('')}
+    </div></div>
+  </div>
+  ${data.error ? `<div class="notice notice-warn"><div><strong>无法生成</strong><p>${escapeHtml(data.error)}</p></div></div>` : ''}
+  <div class="preview-head"><span class="eyebrow">PREVIEW</span><button class="tiny-button" data-action="crud-preview">刷新预览</button></div>
+  <div class="crud-preview">
+    ${data.loading ? '<div class="modal-loading small"><span class="spinner"></span></div>' : preview.length ? preview.map((endpoint) => `<div class="crud-preview-row"><span class="method-badge mini ${methodClass(endpoint.method)}">${escapeHtml(endpoint.method)}</span><code>${escapeHtml(endpoint.path)}</code><span>${escapeHtml(endpoint.name)}</span></div>`).join('') : '<p class="muted">点击“刷新预览”查看将要创建的接口。</p>'}
+  </div>`;
+}
+
+function renderTokenModal(modal) {
+  const token = modal.data?.token || '';
+  return `<div class="modal-intro">仅当服务配置了 <code>ADMIN_TOKEN</code> 时需要。令牌只保存在当前浏览器 localStorage，不会写入项目文件。</div>
+  <label class="field"><span>管理访问令牌</span><input id="admin-token-input" type="password" value="${escapeHtml(token)}" placeholder="粘贴 ADMIN_TOKEN"></label>
+  <div class="notice notice-info"><div><strong>本机免令牌</strong><p>未配置 ADMIN_TOKEN 时，服务默认只允许 127.0.0.1 访问管理接口。</p></div></div>`;
+}
+
+function renderConfirmModal(modal) {
+  return `<div class="confirm-body"><span class="state-icon small">${ICONS.activity}</span><p>${escapeHtml(modal.message || '确定执行此操作吗？')}</p></div>`;
+}

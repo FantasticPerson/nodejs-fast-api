@@ -1,6 +1,6 @@
 # ROADMAP
 
-更新时间：2026-11-12
+更新时间：2026-11-13
 
 ## 当前阶段
 
@@ -37,6 +37,13 @@
 - CRUD 接口在真实数据库中的执行结果。
 - Oracle 真实数据库中的分页和 `COALESCE` NULL 绑定行为。
 
+## 已实现，待 GitHub Actions 验证
+
+- 手动触发 `Build Offline npm Cache` workflow，在 Ubuntu x86_64 runner 上生成项目专属 npm cache。
+- workflow 会删除 `node_modules` 后用 `npm ci --offline` 重新安装，检查 MySQL/Oracle 驱动、Linux x64 Oracle 二进制并运行测试。
+- 产物为 `fastapi-npm-cache.tgz` 与 SHA-256 文件，保留 30 天。
+- 本地已完成 YAML 解析、`npm test` 和 `npm run check`；尚未在 GitHub Actions 实际运行。
+
 ## 待验证
 
 - 使用真实 MySQL 8 执行连接测试、读取表结构、运行 CRUD 和分页查询。
@@ -46,6 +53,8 @@
 - 验证驱动缺失、网络中断、认证失败和数据库错误不会泄露数据源密码。
 - 在真实端口启动服务，检查 `/magic/api/health`、管理页、静态资源和 OpenAPI 文档。
 - 在浏览器中完成管理台视觉与交互验收。
+- 在 GitHub Actions 手动运行离线 npm cache workflow，并确认 artifact 可下载。
+- 在内网 Ubuntu 20.04 x86_64 上使用下载的 cache 执行 `npm ci --offline`，验证 MySQL/Oracle 驱动可加载。
 
 ## 待办
 
@@ -57,7 +66,7 @@
 
 ## 当前阻塞
 
-- 当前沙箱无法解析 npm registry：`npm view mysql2 version` 返回 `ENOTFOUND registry.npmmirror.com`。
+- 当前沙箱无法解析 npm registry：`npm view mysql2 version` 返回 `ENOTFOUND registry.npmmirror.com`；已提供 GitHub Actions 构建路径，待实际运行验证。
 - 当前沙箱禁止额外监听本地端口：在沙箱内执行 `node server/index.js` 返回 `listen EPERM`；已有服务实例可通过 Chrome 访问。
 - 真实 MySQL / Oracle 数据库环境仍未接入，数据库联调尚未完成。
 
@@ -72,6 +81,12 @@
 - `${name}` 原样拼接需要接口级显式开启，开启后仍存在 SQL 注入风险。
 
 ## 最近验证
+
+2026-11-13：
+
+- `npm test`：31 项通过，0 失败。
+- `npm run check`：通过。
+- `.github/workflows/build-npm-cache.yml`：YAML 语法解析通过。
 
 2026-11-12：
 

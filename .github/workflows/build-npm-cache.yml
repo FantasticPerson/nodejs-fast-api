@@ -1,0 +1,54 @@
+name: Build Offline npm Cache
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-cache:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Populate project-local npm cache
+        run: npm ci --cache "$PWD/npm-cache" --no-audit --no-fund
+
+      - name: Remove installed dependencies
+        run: rm -rf node_modules
+
+      - name: Verify offline installation
+        run: npm ci --offline --cache "$PWD/npm-cache" --no-audit --no-fund
+
+      - name: Verify database drivers
+        run: node -e "require('mysql2'); require('oracledb'); console.log('mysql2 and oracledb loaded')"
+
+      - name: Verify Linux Oracle binary
+        run: test -n "$(find node_modules/oracledb/build/Release -name 'oracledb-*-linux-x64.node' -print -quit)"
+
+      - name: Run tests
+        run: npm test
+
+      - name: Package npm cache
+        run: |
+          tar -czf fastapi-npm-cache.tgz npm-cache
+          sha256sum fastapi-npm-cache.tgz > fastapi-npm-cache.tgz.sha256
+
+      - name: Upload npm cache artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fastapi-npm-cache
+          path: |
+            fastapi-npm-cache.tgz
+            fastapi-npm-cache.tgz.sha256
+          if-no-files-found: error
+          retention-days: 30

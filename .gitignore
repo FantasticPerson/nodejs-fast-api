@@ -1,5 +1,9 @@
 node_modules/
 data/
+.offline/
+npm-cache/
+fastapi-npm-cache.tgz
+fastapi-npm-cache.tgz.sha256
 .env
 .env.*
 !.env.example

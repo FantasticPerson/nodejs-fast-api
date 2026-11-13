@@ -299,6 +299,29 @@ npm run check
 
 真实 MySQL / Oracle 连接、数据库方言执行结果、浏览器视觉回归和真实端口启动不属于当前沙箱已验证范围，需要在有数据库和网络的环境中继续联调。
 
+## 离线 npm cache
+
+仓库提供 `.github/workflows/build-npm-cache.yml`，在 GitHub Actions 的 Ubuntu x86_64 runner 和 Node.js 22 环境中生成面向前述 Linux x86_64 部署环境的 npm cache。
+
+1. 将项目推送到 GitHub，私有仓库也可以。不要提交 `.env`、`data/`、`node_modules/` 等本地文件。
+2. 打开 GitHub 仓库的 Actions 页面，选择 `Build Offline npm Cache`，点击 `Run workflow`。
+3. workflow 会生成项目专属 cache，删除 `node_modules` 后用 `npm ci --offline` 重新安装，验证 MySQL/Oracle 驱动和 Linux x64 Oracle 二进制，再执行测试。
+4. 下载名为 `fastapi-npm-cache` 的 artifact，其中包含 `fastapi-npm-cache.tgz` 和对应的 SHA-256 文件。
+
+在内网服务器解压并离线安装：
+
+```bash
+sha256sum -c fastapi-npm-cache.tgz.sha256
+mkdir -p /opt/deploy
+tar -xzf fastapi-npm-cache.tgz -C /opt/deploy
+
+cd /opt/deploy/fastapi
+npm ci --offline --no-audit --no-fund \
+  --cache /opt/deploy/npm-cache
+```
+
+如果只复制完整的 `node_modules`，也可以不在内网执行 `npm install`，直接运行 `npm start`。Oracle 11g 所需的 Oracle Instant Client 仍需单独安装。
+
 ## 常见问题
 
 **提示 `DRIVER_MISSING`**

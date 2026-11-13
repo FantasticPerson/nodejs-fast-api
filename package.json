@@ -16,5 +16,8 @@
   "optionalDependencies": {
     "mysql2": "^3.24.6",
     "oracledb": "^6.10.0"
+  },
+  "dependencies": {
+    "pm2": "^7.1.2"
   }
 }

@@ -15,6 +15,8 @@ const INSTALL_HINTS = {
   oracle: 'npm install oracledb'
 };
 
+const ORACLE_CLOB_CHUNK_SIZE = 32767;
+
 export class DriverManager {
   constructor({ oracleThickMode = false, oracleClientLibDir = '' } = {}) {
     this.pools = new Map();
@@ -200,8 +202,9 @@ export class DriverManager {
         fetchArraySize: options.fetchArraySize || 100,
         autoCommit: true
       });
+      const rows = await normalizeOracleRows(result.rows || [], entry.oracledb);
       return {
-        rows: jsonSafe(result.rows || []),
+        rows: jsonSafe(rows),
         affectedRows: Number(result.rowsAffected || 0),
         insertId: null
       };
@@ -318,6 +321,56 @@ export function buildOracleConnectString(datasource) {
   if (datasource.connectString) return datasource.connectString;
   const separator = String(datasource.connectionType || '').toLowerCase() === 'sid' ? ':' : '/';
   return `${datasource.host}:${datasource.port}${separator}${datasource.serviceName}`;
+}
+
+export async function normalizeOracleRows(rows, oracledb) {
+  return normalizeOracleValue(rows, oracledb);
+}
+
+async function normalizeOracleValue(value, oracledb) {
+  if (value === null || value === undefined || typeof value !== 'object') return value;
+  if (isOracleClob(value, oracledb)) return readOracleClob(value);
+  if (Array.isArray(value)) {
+    const output = [];
+    for (const item of value) output.push(await normalizeOracleValue(item, oracledb));
+    return output;
+  }
+  if (value instanceof Date || Buffer.isBuffer(value)) return value;
+  const output = {};
+  for (const [key, item] of Object.entries(value)) {
+    output[key] = await normalizeOracleValue(item, oracledb);
+  }
+  return output;
+}
+
+function isOracleClob(value, oracledb) {
+  return (
+    typeof value.getData === 'function' &&
+    (value.type === oracledb.CLOB || value.type === oracledb.NCLOB)
+  );
+}
+
+async function readOracleClob(lob) {
+  try {
+    const chunks = [];
+    let offset = 1;
+    while (true) {
+      const chunk = await lob.getData(offset, ORACLE_CLOB_CHUNK_SIZE);
+      if (!chunk) break;
+      const text = Buffer.isBuffer(chunk) ? chunk.toString('utf8') : chunk;
+      chunks.push(text);
+      offset += countCodePoints(text);
+    }
+    return chunks.join('');
+  } finally {
+    lob.destroy?.();
+  }
+}
+
+function countCodePoints(value) {
+  let count = 0;
+  for (const _ of value) count += 1;
+  return count;
 }
 
 function normalizeOracleBind(value) {

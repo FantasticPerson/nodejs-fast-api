@@ -29,6 +29,8 @@
 - 增加 Oracle 独立连接诊断脚本，输出 Thick 模式状态和真实账号认证结果。
 - 修复 Oracle 连接池在认证失败时仍被缓存、导致修正密码后持续报 `ORA-01017` 的问题；连接池只在成功建立认证连接后缓存，草稿测试使用临时池并在结束后关闭。
 - Oracle 数据源增加服务名 / SID 连接方式选择，SID 使用 `HOST:PORT:SID` 拼接；相应连接串、临时池和 SID 配置均有单元测试覆盖。
+- Oracle `CLOB` / `NCLOB` 结果不再把驱动 `Lob` 流对象直接交给 JSON 序列化；长 CLOB 按 32767 字符分块读取并拼接为字符串，覆盖 `GETCLOBVAL()` 和嵌套结果字段。
+- 管理台样式移除 Chrome 102 不支持的 `color-mix()` 等语法，暗黑模式背景、边框和提示色改为兼容的静态主题变量；SQL 编辑器选区改为高对比固定颜色。
 - 管理 API 本机回环限制及 `ADMIN_TOKEN` 鉴权测试。
 - 生成接口的 `OPENAPI_TOKEN` 鉴权与 CORS 实现。
 - AES-256-GCM 数据源密码加密、密钥文件权限和响应脱敏测试。
@@ -97,12 +99,14 @@
 
 2026-11-16：
 
-- `npm test`：52 项通过，0 失败。
+- `npm test`：54 项通过，0 失败。
 - `npm run check`：通过。
 - 针对性测试已验证超时归一化、超时错误识别、分页共享总预算、接口覆盖全局超时、MySQL 超时销毁连接、Oracle 超时调用 `breakExecution()`、接口超时持久化与非法值拒绝、编辑页超时字段渲染和生成接口 504 / `DB_QUERY_TIMEOUT` 响应。
 - 针对性测试已验证 Oracle 执行选项包含 `autoCommit: true`、只读数据源拒绝写操作且不打开连接、写请求 HTTP 403 / `DATASOURCE_READ_ONLY`、只读设置持久化与关闭、只读数据源 CRUD 生成限制，以及 SQL 注释和写 CTE 的分类。
 - 针对性测试已验证 CommonJS 驱动从 ESM 命名空间解包后能取得 `initOracleClient`。
 - 针对性测试已验证 Oracle 认证失败池不会进入缓存、修正配置后可重新创建连接，草稿测试使用临时池并关闭，以及服务名 / SID 连接串拼接。
+- 针对性测试已验证超过单次读取块大小、包含中文和 emoji 的 Oracle CLOB 能按代码点正确分块并拼接为完整字符串。
+- 针对性测试已验证管理台 CSS 不包含 Chrome 102 不支持的 `color-mix()`、`:has()`、容器查询、`oklch()`、`light-dark()` 和 `text-wrap: balance`，并确认普通选区与 SQL 编辑器选区都有显式高对比颜色。
 - 用户已在内网使用 `scripts/check-oracle-connection.mjs` 完成目标 Oracle 账号的真实登录验证；管理台真实连接测试仍待修复版本部署后确认。
 - 真实 MySQL / Oracle 11g 超时中断：未验证。
 - 真实 Oracle 数据库中的自动提交结果：未验证。

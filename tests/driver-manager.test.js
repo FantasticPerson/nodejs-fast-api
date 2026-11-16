@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   buildOracleConnectString,
   DriverManager,
+  normalizeOracleRows,
   unwrapModuleDefault
 } from '../server/driver-manager.js';
 
@@ -50,6 +51,31 @@ test('Oracle pools are cached only after authentication succeeds', async () => {
   const entry = await manager.getPool(datasource);
   assert.equal(attempts, 2);
   assert.equal(manager.pools.get(datasource.id), entry);
+});
+
+test('Oracle CLOB values are read in chunks and concatenated', async () => {
+  const oracledb = { CLOB: { name: 'CLOB' }, NCLOB: { name: 'NCLOB' } };
+  const content = `start-${'中'.repeat(40000)}-😀-end`;
+  const characters = Array.from(content);
+  let reads = 0;
+  let destroyed = false;
+  const lob = {
+    type: oracledb.CLOB,
+    async getData(offset, amount) {
+      reads += 1;
+      return characters.slice(offset - 1, offset - 1 + amount).join('');
+    },
+    destroy() {
+      destroyed = true;
+    }
+  };
+
+  const rows = await normalizeOracleRows([{ text: lob, nested: { text: lob } }], oracledb);
+
+  assert.equal(rows[0].text, content);
+  assert.equal(rows[0].nested.text, content);
+  assert.ok(reads > 1);
+  assert.equal(destroyed, true);
 });
 
 test('ephemeral connection tests close their temporary pool', async () => {

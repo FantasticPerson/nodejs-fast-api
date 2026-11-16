@@ -22,6 +22,7 @@
 ## 技术要求
 
 - Node.js `>= 20`。
+- 管理台浏览器兼容 Chrome 102 及以上，样式不使用 `color-mix()` 等新版本专属语法。
 - MySQL 驱动：`mysql2`。
 - Oracle 驱动：`oracledb`。
 - Oracle 11g、12c 及以上均可使用；分页统一使用 11g 兼容的 `ROWNUM` 写法。
@@ -121,6 +122,8 @@ ORACLE_THICK_MODE=true
 修改配置后需要重启服务。完整步骤见 [docs/offline-deployment.md](docs/offline-deployment.md)。Thick 模式启用后，MySQL 和 Oracle 12c+ 数据源仍可同时使用。
 
 当前 Oracle 元数据读取按默认大写对象名处理，大小写混合的 quoted identifier 不是主要支持场景。联合主键暂不支持自动 CRUD，请改用自定义 SQL 接口；没有单列主键的表只能生成列表和新增。
+
+Oracle `CLOB` / `NCLOB` 字段和 `GETCLOBVAL()` 返回值会由驱动读取完整内容后序列化为字符串。长 CLOB 按 32767 字符分块读取再拼接，不再依赖 `DBMS_LOB.SUBSTR` 的 4000 字符限制；超大字段会占用相应内存并增大 JSON 响应体，接口层仍建议控制返回字段和分页大小。
 
 Oracle 11g 没有 Identity Column 元数据。由序列和触发器生成主键的表不会自动识别为自增列，自动生成的 POST 接口需要显式提交主键，或改用自定义 SQL 接口。
 

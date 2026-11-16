@@ -103,7 +103,7 @@ npm run dev
 
 ### Oracle 数据源
 
-需要填写主机、端口、服务名或 SID、用户名和密码，默认端口为 `1521`。`schema` 可不填，默认使用用户名并转换为大写；也可以直接填写连接字符串覆盖主机配置。
+需要填写主机、端口、服务名或 SID、用户名和密码，默认端口为 `1521`。连接方式必须明确选择「服务名」或「SID」：服务名生成 `HOST:PORT/SERVICE_NAME`，SID 生成 `HOST:PORT:SID`。`schema` 可不填，默认使用用户名并转换为大写；也可以直接填写连接字符串覆盖主机和服务名 / SID 配置。
 
 连接 Oracle 11g 时，还需要安装 Oracle Client 库并启用 Thick 模式。通常使用可连接 11.2+ 的 Oracle 19c Instant Client：
 

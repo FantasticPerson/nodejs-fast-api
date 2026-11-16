@@ -103,7 +103,7 @@ export class DatasourceService {
       : existing?.passwordEnc
         ? this.secretBox.decrypt(existing.passwordEnc)
         : '';
-    return this.driverManager.test({ ...normalized, password });
+    return this.driverManager.test({ ...normalized, password }, { ephemeral: true });
   }
 
   async listTables(id) {
@@ -138,6 +138,7 @@ export class DatasourceService {
     const database = String(input.database || '').trim();
     const serviceName = String(input.serviceName || '').trim();
     const connectString = String(input.connectString || '').trim();
+    const connectionType = type === 'oracle' ? normalizeOracleConnectionType(input.connectionType) : '';
     const schema = String(input.schema || '').trim().toUpperCase();
     const readOnly = parseBoolean(input.readOnly, false);
     if (type === 'mysql' && !database) throw new ValidationError('MySQL 数据库名不能为空');
@@ -154,6 +155,7 @@ export class DatasourceService {
       database,
       serviceName,
       connectString,
+      connectionType,
       schema,
       readOnly
     };
@@ -174,6 +176,7 @@ function sanitizeDatasource(datasource) {
     database: datasource.database || '',
     serviceName: datasource.serviceName || '',
     connectString: datasource.connectString || '',
+    connectionType: datasource.connectionType || 'serviceName',
     schema: datasource.schema || '',
     readOnly: Boolean(datasource.readOnly),
     username: datasource.username,
@@ -181,6 +184,14 @@ function sanitizeDatasource(datasource) {
     createdAt: datasource.createdAt,
     updatedAt: datasource.updatedAt
   };
+}
+
+function normalizeOracleConnectionType(value) {
+  const connectionType = String(value || 'serviceName').trim().toLowerCase();
+  if (!['serviceName', 'sid'].includes(connectionType)) {
+    throw new ValidationError('Oracle 连接方式必须是服务名或 SID');
+  }
+  return connectionType;
 }
 
 function assertUniqueName(datasources, name, currentId) {

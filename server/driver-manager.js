@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { AppError } from './errors.js';
 import { isSelectSql } from './sql/statement.js';
 import { jsonSafe, parseBoolean, truncate } from './utils.js';
@@ -40,6 +41,18 @@ export class DriverManager {
     const cached = this.pools.get(datasource.id);
     if (cached) return cached;
 
+    const entry = await this.createPoolEntry(datasource);
+    try {
+      await this.validatePoolEntry(entry);
+    } catch (error) {
+      await this.closePoolEntry(entry);
+      throw error;
+    }
+    this.pools.set(datasource.id, entry);
+    return entry;
+  }
+
+  async createPoolEntry(datasource) {
     if (datasource.type === 'mysql') {
       const mysql = await loadModule('mysql2/promise', 'mysql');
       const pool = mysql.createPool({
@@ -57,16 +70,13 @@ export class DriverManager {
         supportBigNumbers: true,
         bigNumberStrings: true
       });
-      const entry = { type: 'mysql', pool };
-      this.pools.set(datasource.id, entry);
-      return entry;
+      return { type: 'mysql', pool };
     }
 
     if (datasource.type === 'oracle') {
       const oracledb = await loadModule('oracledb', 'oracle');
       this.enableOracleThickMode(oracledb);
-      const connectString =
-        datasource.connectString || `${datasource.host}:${datasource.port}/${datasource.serviceName}`;
+      const connectString = buildOracleConnectString(datasource);
       const pool = await oracledb.createPool({
         user: datasource.username,
         password: datasource.password,
@@ -76,12 +86,22 @@ export class DriverManager {
         poolTimeout: 60,
         queueTimeout: 30000
       });
-      const entry = { type: 'oracle', pool, oracledb };
-      this.pools.set(datasource.id, entry);
-      return entry;
+      return { type: 'oracle', pool, oracledb };
     }
 
     throw new AppError(`不支持的数据源类型：${datasource.type}`, 422, 'UNSUPPORTED_DATASOURCE');
+  }
+
+  async validatePoolEntry(entry) {
+    let connection = null;
+    try {
+      connection = await entry.pool.getConnection();
+    } finally {
+      if (connection) {
+        if (entry.type === 'mysql') connection.release();
+        else await connection.close().catch(() => {});
+      }
+    }
   }
 
   async execute(datasource, sql, values = [], options = {}) {
@@ -196,24 +216,31 @@ export class DriverManager {
     }
   }
 
-  async test(datasource) {
+  async test(datasource, { ephemeral = false } = {}) {
+    const testDatasource = ephemeral
+      ? { ...datasource, id: `${datasource.type}_test_${randomUUID()}` }
+      : datasource;
     const startedAt = Date.now();
-    if (datasource.type === 'mysql') {
-      const result = await this.execute(datasource, 'SELECT VERSION() AS version', []);
+    try {
+      if (testDatasource.type === 'mysql') {
+        const result = await this.execute(testDatasource, 'SELECT VERSION() AS version', []);
+        return {
+          ok: true,
+          type: 'mysql',
+          version: result.rows[0]?.version || 'MySQL',
+          latencyMs: Date.now() - startedAt
+        };
+      }
+      const result = await this.execute(testDatasource, 'SELECT USER AS current_user FROM DUAL', []);
       return {
         ok: true,
-        type: 'mysql',
-        version: result.rows[0]?.version || 'MySQL',
+        type: 'oracle',
+        currentUser: result.rows[0]?.current_user || result.rows[0]?.CURRENT_USER || null,
         latencyMs: Date.now() - startedAt
       };
+    } finally {
+      if (ephemeral) await this.closePool(testDatasource.id);
     }
-    const result = await this.execute(datasource, 'SELECT USER AS current_user FROM DUAL', []);
-    return {
-      ok: true,
-      type: 'oracle',
-      currentUser: result.rows[0]?.current_user || result.rows[0]?.CURRENT_USER || null,
-      latencyMs: Date.now() - startedAt
-    };
   }
 
   enableOracleThickMode(oracledb) {
@@ -240,6 +267,10 @@ export class DriverManager {
     const entry = this.pools.get(datasourceId);
     if (!entry) return;
     this.pools.delete(datasourceId);
+    await this.closePoolEntry(entry);
+  }
+
+  async closePoolEntry(entry) {
     try {
       if (entry.type === 'mysql') {
         await entry.pool.end();
@@ -268,7 +299,7 @@ async function probeModule(name) {
 
 async function loadModule(name, dialect) {
   try {
-    return await import(name);
+    return unwrapModuleDefault(await import(name));
   } catch {
     throw new AppError(
       `${dialect === 'oracle' ? 'Oracle' : 'MySQL'} 驱动未安装，请运行：${INSTALL_HINTS[dialect]}`,
@@ -277,6 +308,16 @@ async function loadModule(name, dialect) {
       { install: INSTALL_HINTS[dialect] }
     );
   }
+}
+
+export function unwrapModuleDefault(imported) {
+  return imported?.default ?? imported;
+}
+
+export function buildOracleConnectString(datasource) {
+  if (datasource.connectString) return datasource.connectString;
+  const separator = String(datasource.connectionType || '').toLowerCase() === 'sid' ? ':' : '/';
+  return `${datasource.host}:${datasource.port}${separator}${datasource.serviceName}`;
 }
 
 function normalizeOracleBind(value) {

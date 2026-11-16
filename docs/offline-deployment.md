@@ -413,6 +413,23 @@ node -e "const oracledb=require('oracledb'); oracledb.initOracleClient(); consol
 
 输出 `thin= false` 表示 Thick 模式加载成功。之后在管理台数据源页面测试 Oracle 11g 连接。
 
+验证真实账号和连接串：
+
+```bash
+cd /opt/deploy/fastapi
+read -r -s -p "Oracle password: " ORACLE_PASSWORD; echo
+export ORACLE_PASSWORD
+node scripts/check-oracle-connection.mjs \
+  --user db_user \
+  --connect 10.0.0.10:1521/ORCL \
+  --client-lib /opt/oracle/instantclient_19_33
+unset ORACLE_PASSWORD
+```
+
+服务名连接使用 `HOST:1521/SERVICE_NAME`，SID 连接使用 `HOST:1521:SID`。脚本会输出 `thin`、Oracle Client 版本和 `ORA-xxxxx` 错误码，但不会输出密码。
+
+在管理台添加 Oracle 数据源时，必须在「Oracle 连接方式」中选择「服务名」或「SID」。选择 SID 后，服务名 / SID 值会按 `HOST:1521:SID` 拼接；如果不想依赖自动拼接，可以把完整连接字符串填入「Oracle 连接字符串」字段。错误密码测试不会再缓存失败的连接池，修正配置后可以直接重试，不需要重启服务。
+
 如果服务器启用了 UFW：
 
 ```bash

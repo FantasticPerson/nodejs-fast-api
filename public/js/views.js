@@ -445,8 +445,9 @@ function renderDatasources() {
 }
 
 function renderDatasourceCard(datasource) {
+  const oracleSeparator = datasource.connectionType === 'sid' ? ':' : '/';
   const target = datasource.type === 'oracle'
-    ? (datasource.connectString || `${datasource.host}:${datasource.port}/${datasource.serviceName}`)
+    ? (datasource.connectString || `${datasource.host}:${datasource.port}${oracleSeparator}${datasource.serviceName}`)
     : `${datasource.host}:${datasource.port}/${datasource.database}`;
   return `<article class="datasource-card">
     <div class="ds-card-head">
@@ -582,7 +583,11 @@ function renderDatasourceModal(modal) {
       <label class="field"><span>主机</span><input name="host" value="${escapeHtml(ds.host || '127.0.0.1')}" placeholder="127.0.0.1"></label>
       <label class="field"><span>端口</span><input name="port" type="number" value="${escapeHtml(ds.port || '')}" placeholder="3306 / 1521"></label>
       <label class="field"><span>MySQL 数据库</span><input name="database" value="${escapeHtml(ds.database || '')}" placeholder="database_name"></label>
-      <label class="field"><span>Oracle 服务名 / SID</span><input name="serviceName" value="${escapeHtml(ds.serviceName || '')}" placeholder="ORCL"></label>
+      <label class="field"><span>Oracle 连接方式</span><select name="connectionType">
+        <option value="serviceName" ${ds.connectionType !== 'sid' ? 'selected' : ''}>服务名</option>
+        <option value="sid" ${ds.connectionType === 'sid' ? 'selected' : ''}>SID</option>
+      </select></label>
+      <label class="field"><span>Oracle 服务名 / SID 值</span><input name="serviceName" value="${escapeHtml(ds.serviceName || '')}" placeholder="ORCL"></label>
       <label class="field"><span>Oracle Schema（可选）</span><input name="schema" value="${escapeHtml(ds.schema || '')}" placeholder="默认使用用户名"></label>
       <label class="field field-span-2"><span>Oracle 连接字符串（可选，覆盖主机配置）</span><input name="connectString" value="${escapeHtml(ds.connectString || '')}" placeholder="host:port/service_name"></label>
       <label class="field"><span>用户名</span><input name="username" value="${escapeHtml(ds.username || '')}" placeholder="db_user"></label>

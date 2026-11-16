@@ -25,6 +25,10 @@
 - 管理台编辑页支持配置接口超时，管理 API 保存并回显 `timeoutMs`。
 - Oracle 非查询语句启用 `autoCommit`，通过驱动选项测试确认 DML 执行后提交。
 - 数据源支持持久化只读设置；运行时对非查询 SQL 返回 HTTP 403 / `DATASOURCE_READ_ONLY`，只读数据源的 CRUD 生成仅保留查询接口。
+- 修复 ESM 加载 CommonJS `oracledb` 时未解包 `default`、导致 `initOracleClient` 不可用的问题。
+- 增加 Oracle 独立连接诊断脚本，输出 Thick 模式状态和真实账号认证结果。
+- 修复 Oracle 连接池在认证失败时仍被缓存、导致修正密码后持续报 `ORA-01017` 的问题；连接池只在成功建立认证连接后缓存，草稿测试使用临时池并在结束后关闭。
+- Oracle 数据源增加服务名 / SID 连接方式选择，SID 使用 `HOST:PORT:SID` 拼接；相应连接串、临时池和 SID 配置均有单元测试覆盖。
 - 管理 API 本机回环限制及 `ADMIN_TOKEN` 鉴权测试。
 - 生成接口的 `OPENAPI_TOKEN` 鉴权与 CORS 实现。
 - AES-256-GCM 数据源密码加密、密钥文件权限和响应脱敏测试。
@@ -62,6 +66,7 @@
 - 在浏览器中完成管理台视觉与交互验收。
 - 在 GitHub Actions 手动运行离线 npm cache workflow，并确认 artifact 可下载。
 - 在内网 Ubuntu 20.04 x86_64 上使用下载的 cache 执行 `npm ci --offline`，验证 MySQL/Oracle 驱动可加载。
+- 使用内网目标 Oracle 账号在管理台完成连接测试、元数据读取和实际接口调用。
 
 ## 待办
 
@@ -92,10 +97,13 @@
 
 2026-11-16：
 
-- `npm test`：47 项通过，0 失败。
+- `npm test`：52 项通过，0 失败。
 - `npm run check`：通过。
 - 针对性测试已验证超时归一化、超时错误识别、分页共享总预算、接口覆盖全局超时、MySQL 超时销毁连接、Oracle 超时调用 `breakExecution()`、接口超时持久化与非法值拒绝、编辑页超时字段渲染和生成接口 504 / `DB_QUERY_TIMEOUT` 响应。
 - 针对性测试已验证 Oracle 执行选项包含 `autoCommit: true`、只读数据源拒绝写操作且不打开连接、写请求 HTTP 403 / `DATASOURCE_READ_ONLY`、只读设置持久化与关闭、只读数据源 CRUD 生成限制，以及 SQL 注释和写 CTE 的分类。
+- 针对性测试已验证 CommonJS 驱动从 ESM 命名空间解包后能取得 `initOracleClient`。
+- 针对性测试已验证 Oracle 认证失败池不会进入缓存、修正配置后可重新创建连接，草稿测试使用临时池并关闭，以及服务名 / SID 连接串拼接。
+- 用户已在内网使用 `scripts/check-oracle-connection.mjs` 完成目标 Oracle 账号的真实登录验证；管理台真实连接测试仍待修复版本部署后确认。
 - 真实 MySQL / Oracle 11g 超时中断：未验证。
 - 真实 Oracle 数据库中的自动提交结果：未验证。
 

@@ -1,6 +1,87 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { DriverManager } from '../server/driver-manager.js';
+import {
+  buildOracleConnectString,
+  DriverManager,
+  unwrapModuleDefault
+} from '../server/driver-manager.js';
+
+test('Oracle connect strings use service-name or SID syntax', () => {
+  const base = { host: '10.0.0.10', port: 1521, serviceName: 'ORCL' };
+
+  assert.equal(buildOracleConnectString(base), '10.0.0.10:1521/ORCL');
+  assert.equal(
+    buildOracleConnectString({ ...base, connectionType: 'sid' }),
+    '10.0.0.10:1521:ORCL'
+  );
+  assert.equal(
+    buildOracleConnectString({ ...base, connectString: 'db.example.com:1521/PDB1' }),
+    'db.example.com:1521/PDB1'
+  );
+});
+
+test('Oracle pools are cached only after authentication succeeds', async () => {
+  const manager = new DriverManager();
+  let attempts = 0;
+  let closed = 0;
+  manager.createPoolEntry = async () => {
+    attempts += 1;
+    const currentAttempt = attempts;
+    return {
+      type: 'oracle',
+      pool: {
+        async getConnection() {
+          if (currentAttempt === 1) throw new Error('ORA-01017: invalid username/password');
+          return { close: async () => {} };
+        },
+        async close() {
+          closed += 1;
+        }
+      },
+      oracledb: { OUT_FORMAT_OBJECT: 4002 }
+    };
+  };
+  const datasource = { id: 'ds_oracle_retry', type: 'oracle' };
+
+  await assert.rejects(manager.getPool(datasource), /ORA-01017/);
+  assert.equal(manager.pools.has(datasource.id), false);
+  assert.equal(closed, 1);
+
+  const entry = await manager.getPool(datasource);
+  assert.equal(attempts, 2);
+  assert.equal(manager.pools.get(datasource.id), entry);
+});
+
+test('ephemeral connection tests close their temporary pool', async () => {
+  const manager = new DriverManager();
+  let testedId = null;
+  let closedId = null;
+  manager.execute = async (datasource) => {
+    testedId = datasource.id;
+    return { rows: [{ CURRENT_USER: 'APP_USER' }] };
+  };
+  manager.closePool = async (datasourceId) => {
+    closedId = datasourceId;
+  };
+
+  const result = await manager.test({ type: 'oracle' }, { ephemeral: true });
+
+  assert.match(testedId, /^oracle_test_/);
+  assert.equal(closedId, testedId);
+  assert.equal(result.currentUser, 'APP_USER');
+});
+
+test('CommonJS driver modules are unwrapped from the ESM namespace', () => {
+  const namespace = {
+    getConnection() {},
+    default: { thin: true, initOracleClient() {} }
+  };
+
+  const driver = unwrapModuleDefault(namespace);
+  assert.equal(typeof driver.initOracleClient, 'function');
+  assert.equal(driver.thin, true);
+  assert.equal(unwrapModuleDefault(driver), driver);
+});
 
 test('Oracle Thick mode initializes once with the configured client directory', () => {
   const manager = new DriverManager({ oracleClientLibDir: '/opt/oracle/instantclient_19' });

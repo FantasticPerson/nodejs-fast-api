@@ -41,3 +41,37 @@ test('datasource read-only setting is persisted and can be disabled', async () =
   assert.equal(store.findDatasource(created.id).passwordEnc !== null, true);
   await fs.rm(dir, { recursive: true, force: true });
 });
+
+test('Oracle draft tests use a temporary pool and preserve the SID connection mode', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'node-magic-oracle-draft-'));
+  const store = await new JsonStore(path.join(dir, 'state.json')).init();
+  const secretBox = await SecretBox.create({ keyFile: path.join(dir, 'secret.bin') });
+  const calls = [];
+  const service = new DatasourceService({
+    store,
+    secretBox,
+    driverManager: {
+      async test(datasource, options) {
+        calls.push({ datasource, options });
+        return { ok: true, type: 'oracle', currentUser: 'APP_USER' };
+      },
+      async closePool() {}
+    }
+  });
+
+  await service.testDraft({
+    type: 'oracle',
+    name: 'Oracle SID',
+    host: '10.0.0.10',
+    port: '1521',
+    username: 'app_user',
+    password: 'secret',
+    serviceName: 'ORCL',
+    connectionType: 'sid'
+  });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].datasource.connectionType, 'sid');
+  assert.deepEqual(calls[0].options, { ephemeral: true });
+  await fs.rm(dir, { recursive: true, force: true });
+});

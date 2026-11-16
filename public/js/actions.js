@@ -321,6 +321,7 @@ export function createActions({ render, refreshData, boot }) {
       group: editor.group,
       enabled: editor.enabled,
       allowRawSql: editor.allowRawSql,
+      timeoutMs: Number(editor.timeoutMs) || 0,
       params: editor.params.map((param) => ({
         name: param.name,
         in: param.in,
@@ -366,6 +367,7 @@ export function createActions({ render, refreshData, boot }) {
       sql: editor.sql,
       params: editor.params,
       allowRawSql: editor.allowRawSql,
+      timeoutMs: Number(editor.timeoutMs) || 0,
       pagination: { enabled: Boolean(editor.pagination?.enabled) },
       values: merged
     };
@@ -533,6 +535,11 @@ export function createActions({ render, refreshData, boot }) {
     const table = state.modal?.data?.tableInfo;
     if (!table) return;
     const hasPk = table.primaryKeys?.length === 1;
+    const datasource = state.datasources.find((item) => item.id === state.modal.data.dsId);
+    const readOnly = Boolean(datasource?.readOnly);
+    const defaultMethods = hasPk
+      ? (readOnly ? ['list', 'get'] : ['list', 'get', 'create', 'update', 'delete'])
+      : (readOnly ? ['list'] : ['list', 'create']);
     state.modal = {
       type: 'generator',
       title: `生成 CRUD · ${table.name}`,
@@ -540,9 +547,10 @@ export function createActions({ render, refreshData, boot }) {
       size: 'wide',
       data: {
         dsId: state.modal.data.dsId,
+        readOnly,
         tableInfo: table,
         pathBase: `/${slugify(table.name)}`,
-        methods: hasPk ? ['list', 'get', 'create', 'update', 'delete'] : ['list', 'create'],
+        methods: defaultMethods,
         preview: null,
         loading: true,
         error: null
@@ -665,6 +673,8 @@ export function createActions({ render, refreshData, boot }) {
       state.editor.pagination.maxPageSize = Number(target.value) || 100;
     } else if (field === 'allowRawSql' || field === 'enabled') {
       state.editor[field] = target.checked;
+    } else if (field === 'timeoutMs') {
+      state.editor.timeoutMs = Math.max(0, Number(target.value) || 0);
     } else if (field === 'testPage' || field === 'testPageSize') {
       state.editor[field] = Number(target.value) || 1;
     } else if (field === 'method' || field === 'datasourceId' || field === 'responseMode') {

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { ConflictError, NotFoundError, ValidationError } from '../errors.js';
 import { listTables, getTableInfo } from '../metadata.js';
-import { parsePositiveInteger } from '../utils.js';
+import { parseBoolean, parsePositiveInteger } from '../utils.js';
 
 const TYPES = new Set(['mysql', 'oracle']);
 
@@ -139,6 +139,7 @@ export class DatasourceService {
     const serviceName = String(input.serviceName || '').trim();
     const connectString = String(input.connectString || '').trim();
     const schema = String(input.schema || '').trim().toUpperCase();
+    const readOnly = parseBoolean(input.readOnly, false);
     if (type === 'mysql' && !database) throw new ValidationError('MySQL 数据库名不能为空');
     if (type === 'oracle' && !connectString && !serviceName) {
       throw new ValidationError('Oracle 需要填写服务名 / SID，或直接填写连接字符串');
@@ -153,7 +154,8 @@ export class DatasourceService {
       database,
       serviceName,
       connectString,
-      schema
+      schema,
+      readOnly
     };
   }
 
@@ -173,6 +175,7 @@ function sanitizeDatasource(datasource) {
     serviceName: datasource.serviceName || '',
     connectString: datasource.connectString || '',
     schema: datasource.schema || '',
+    readOnly: Boolean(datasource.readOnly),
     username: datasource.username,
     hasPassword: Boolean(datasource.passwordEnc),
     createdAt: datasource.createdAt,

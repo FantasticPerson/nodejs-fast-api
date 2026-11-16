@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { normalizeBasePath, parsePositiveInteger } from './utils.js';
+import { normalizeTimeoutMs } from './timeout.js';
 
 const serverDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -50,6 +51,7 @@ export function loadConfig(overrides = {}) {
     corsOrigin: (process.env.CORS_ORIGIN || '*').trim(),
     oracleThickMode: parseBoolean(process.env.ORACLE_THICK_MODE, false),
     oracleClientLibDir: (process.env.ORACLE_CLIENT_LIB_DIR || '').trim(),
+    queryTimeoutMs: normalizeTimeoutMs(process.env.QUERY_TIMEOUT_MS, 30000),
     openapiPath,
     managementPath: '/magic/api',
     stateFile,

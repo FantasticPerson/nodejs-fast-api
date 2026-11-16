@@ -459,10 +459,12 @@ a { color: inherit; }
 .datasource-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 15px; }
 .datasource-card { display: flex; flex-direction: column; padding: 19px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow-sm); }
 .ds-card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.ds-type-group { display: flex; align-items: center; gap: 6px; }
 .db-type { display: inline-flex; align-items: center; gap: 6px; padding: 4px 7px; border-radius: 5px; font-family: var(--font-mono); font-size: 9px; font-weight: 700; letter-spacing: 0.06em; }
 .db-type i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .db-type.mysql { background: var(--teal-soft); color: var(--teal); }
 .db-type.oracle { background: var(--danger-soft); color: var(--danger); }
+.readonly-badge { padding: 3px 6px; border-radius: 5px; background: var(--gold-soft); color: var(--gold); font-size: 9px; font-weight: 700; }
 .endpoint-count { color: var(--muted); font-size: 10px; }
 .datasource-card h2 { margin: 16px 0 6px; font-size: 22px; letter-spacing: -0.04em; }
 .ds-target { display: block; color: var(--muted); font-family: var(--font-mono); font-size: 10px; overflow-wrap: anywhere; }
@@ -472,6 +474,9 @@ a { color: inherit; }
 .ds-meta-grid strong { display: block; font-size: 11px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ds-actions { display: flex; align-items: center; gap: 4px; margin-top: auto; padding-top: 4px; }
 .ds-actions .secondary-button { flex: 1; }
+.ds-readonly-row { display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 16px; padding: 11px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-2); }
+.ds-readonly-row strong { display: block; font-size: 12px; }
+.ds-readonly-row small { display: block; margin-top: 4px; color: var(--muted); font-size: 10px; line-height: 1.5; }
 
 .log-table { border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: var(--surface); box-shadow: var(--shadow-sm); }
 .log-head, .log-row { display: grid; grid-template-columns: 150px minmax(220px, 1fr) 70px 80px 130px minmax(130px, 0.7fr); gap: 10px; align-items: center; padding: 11px 15px; }

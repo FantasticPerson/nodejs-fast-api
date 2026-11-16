@@ -7,6 +7,7 @@ export const state = {
     openapiPath: '/openapi',
     drivers: { mysql: false, oracle: false },
     adminTokenRequired: false,
+    queryTimeoutMs: 30000,
     version: '1.0.0'
   },
   loading: true,
@@ -31,6 +32,7 @@ export function createBlankEditor() {
     group: '',
     enabled: true,
     allowRawSql: false,
+    timeoutMs: 0,
     params: [{ name: 'id', in: 'query', type: 'string', required: false, defaultValue: '', description: '' }],
     pagination: { enabled: false, maxPageSize: 100 },
     responseMode: 'wrap',
@@ -54,6 +56,7 @@ export function cloneEditor(endpoint) {
       enabled: Boolean(endpoint.pagination?.enabled),
       maxPageSize: endpoint.pagination?.maxPageSize || 100
     },
+    timeoutMs: endpoint.timeoutMs ?? 0,
     testValues: JSON.stringify(buildInitialValues(endpoint.params || []), null, 2),
     testPage: 1,
     testPageSize: endpoint.pagination?.maxPageSize ? Math.min(20, endpoint.pagination.maxPageSize) : 20,

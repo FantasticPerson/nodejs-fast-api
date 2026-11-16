@@ -52,7 +52,11 @@ export function createApplication({
   const logs = new LogBuffer(200);
   const datasourceService = new DatasourceService({ store, secretBox, driverManager });
   const endpointService = new EndpointService({ store });
-  const queryService = new QueryService({ driverManager, endpointService });
+  const queryService = new QueryService({
+    driverManager,
+    endpointService,
+    queryTimeoutMs: config.queryTimeoutMs
+  });
   const crudService = new CrudService({ datasourceService, endpointService });
   const runtime = new RuntimeHandler({
     config,
@@ -164,6 +168,7 @@ export function createApplication({
             openapiPath: config.openapiPath,
             adminTokenRequired: Boolean(config.adminToken),
             openapiTokenRequired: Boolean(config.openapiToken),
+            queryTimeoutMs: config.queryTimeoutMs,
             drivers,
             version: config.version,
             serverTime: new Date().toISOString()
@@ -308,6 +313,7 @@ export function createApplication({
       description: '',
       enabled: true,
       allowRawSql: Boolean(body.allowRawSql),
+      timeoutMs: body.timeoutMs,
       params: normalizePreviewParams(body.params),
       pagination: {
         enabled: Boolean(body.pagination?.enabled ?? body.paginationEnabled),

@@ -5,9 +5,15 @@ import { normalizeEndpointPath } from './path.js';
 import { quoteIdentifier, quoteTable } from './sql/identifiers.js';
 
 const METHOD_ORDER = ['list', 'get', 'create', 'update', 'delete'];
+const QUERY_METHODS = ['list', 'get'];
+const WRITE_METHODS = new Set(['create', 'update', 'delete']);
 
 export function buildCrudDefinitions({ datasource, table, pathBase, methods }) {
-  const selected = new Set(methods?.length ? methods : METHOD_ORDER);
+  const requested = methods?.length ? methods : null;
+  if (requested && datasource.readOnly && requested.some((method) => WRITE_METHODS.has(method))) {
+    throw new ValidationError('数据源已启用只读模式，只能生成查询接口');
+  }
+  const selected = new Set(requested || (datasource.readOnly ? QUERY_METHODS : METHOD_ORDER));
   for (const method of selected) {
     if (!METHOD_ORDER.includes(method)) throw new ValidationError(`未知的 CRUD 方法：${method}`);
   }

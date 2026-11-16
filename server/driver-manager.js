@@ -1,5 +1,13 @@
 import { AppError } from './errors.js';
-import { jsonSafe, truncate } from './utils.js';
+import { isSelectSql } from './sql/statement.js';
+import { jsonSafe, parseBoolean, truncate } from './utils.js';
+import {
+  createQueryDeadline,
+  isDriverTimeoutError,
+  normalizeTimeoutMs,
+  queryTimeoutError,
+  runWithTimeout
+} from './timeout.js';
 
 const INSTALL_HINTS = {
   mysql: 'npm install mysql2',
@@ -77,46 +85,114 @@ export class DriverManager {
   }
 
   async execute(datasource, sql, values = [], options = {}) {
-    let entry;
+    const timeoutMs = normalizeTimeoutMs(options.timeoutMs, 0);
+    const totalTimeoutMs = normalizeTimeoutMs(options.totalTimeoutMs, timeoutMs);
+    const deadline = createQueryDeadline(timeoutMs);
+    const control = { cancel: null };
     try {
-      entry = await this.getPool(datasource);
-      if (entry.type === 'mysql') {
-        const [rows] = await entry.pool.execute(sql, values);
-        if (Array.isArray(rows)) {
-          return { rows: jsonSafe(rows), affectedRows: 0, insertId: null };
+      if (parseBoolean(datasource.readOnly, false) && !isSelectSql(sql)) {
+        throw new AppError(
+          `数据源「${datasource.name || datasource.id}」已启用只读模式，只能执行查询语句`,
+          403,
+          'DATASOURCE_READ_ONLY'
+        );
+      }
+      return await runWithTimeout(
+        async () => {
+          const entry = await this.getPool(datasource);
+          if (entry.type === 'mysql') {
+            return await this.executeMysql(entry, sql, values, deadline, control);
+          }
+          return await this.executeOracle(entry, sql, values, options, deadline, control);
+        },
+        timeoutMs,
+        {
+          totalTimeoutMs,
+          onTimeout: () => control.cancel?.()
         }
-        return {
-          rows: [],
-          affectedRows: Number(rows.affectedRows || 0),
-          insertId: rows.insertId ?? null
-        };
-      }
-
-      const connection = await entry.pool.getConnection();
-      try {
-        const binds = {};
-        values.forEach((value, index) => {
-          binds[`p${index}`] = normalizeOracleBind(value);
-        });
-        const result = await connection.execute(sql, binds, {
-          outFormat: entry.oracledb.OUT_FORMAT_OBJECT,
-          fetchArraySize: options.fetchArraySize || 100
-        });
-        return {
-          rows: jsonSafe(result.rows || []),
-          affectedRows: Number(result.rowsAffected || 0),
-          insertId: null
-        };
-      } finally {
-        await connection.close();
-      }
+      );
     } catch (error) {
       if (error instanceof AppError) throw error;
+      if (isDriverTimeoutError(error)) throw queryTimeoutError(totalTimeoutMs || timeoutMs);
       throw new AppError(
         `数据库执行失败：${truncate(error?.message || error, 500)}`,
         502,
         'DB_EXECUTION_FAILED'
       );
+    }
+  }
+
+  async executeMysql(entry, sql, values, deadline, control) {
+    let connection = null;
+    let destroyed = false;
+    control.cancel = () => {
+      if (connection) {
+        destroyed = true;
+        connection.destroy();
+      }
+    };
+    try {
+      connection = await entry.pool.getConnection();
+      if (deadline.expired()) throw queryTimeoutError(deadline.timeoutMs);
+      const queryOptions = { sql, values };
+      if (deadline.timeoutMs) queryOptions.timeout = Math.max(1, deadline.remainingMs());
+      const [rows] = await connection.execute(queryOptions, []);
+      if (Array.isArray(rows)) {
+        return { rows: jsonSafe(rows), affectedRows: 0, insertId: null };
+      }
+      return {
+        rows: [],
+        affectedRows: Number(rows.affectedRows || 0),
+        insertId: rows.insertId ?? null
+      };
+    } catch (error) {
+      if (connection && isDriverTimeoutError(error)) {
+        destroyed = true;
+        connection.destroy();
+      }
+      throw error;
+    } finally {
+      if (connection && !destroyed) connection.release();
+    }
+  }
+
+  async executeOracle(entry, sql, values, options, deadline, control) {
+    let connection = null;
+    let breakPromise = null;
+    let cancelled = false;
+    let driverTimedOut = false;
+    control.cancel = () => {
+      cancelled = true;
+      if (connection) {
+        breakPromise = Promise.resolve(connection.breakExecution()).catch(() => {});
+      }
+    };
+    try {
+      connection = await entry.pool.getConnection();
+      if (deadline.expired() || cancelled) throw queryTimeoutError(deadline.timeoutMs);
+      const binds = {};
+      values.forEach((value, index) => {
+        binds[`p${index}`] = normalizeOracleBind(value);
+      });
+      if (deadline.timeoutMs) connection.callTimeout = Math.max(1, deadline.remainingMs());
+      const result = await connection.execute(sql, binds, {
+        outFormat: entry.oracledb.OUT_FORMAT_OBJECT,
+        fetchArraySize: options.fetchArraySize || 100,
+        autoCommit: true
+      });
+      return {
+        rows: jsonSafe(result.rows || []),
+        affectedRows: Number(result.rowsAffected || 0),
+        insertId: null
+      };
+    } catch (error) {
+      if (isDriverTimeoutError(error)) driverTimedOut = true;
+      throw error;
+    } finally {
+      if (breakPromise) await breakPromise;
+      if (connection) {
+        await connection.close({ drop: Boolean(breakPromise || driverTimedOut) }).catch(() => {});
+      }
     }
   }
 

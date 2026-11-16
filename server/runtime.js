@@ -68,6 +68,7 @@ export class RuntimeHandler {
       this.endpointService.recordCall(endpoint.record.id).catch(() => {});
     } catch (error) {
       status = error instanceof AppError ? error.status : 500;
+      const errorCode = error instanceof AppError ? error.code : 'INTERNAL_ERROR';
       const message =
         error instanceof ValidationError
           ? error.message
@@ -77,8 +78,8 @@ export class RuntimeHandler {
       errorText = message;
       const responsePayload =
         endpoint.record.responseMode === 'raw'
-          ? { error: message, code: status }
-          : { code: status, message, data: null };
+          ? { error: message, code: status, errorCode }
+          : { code: status, message, data: null, errorCode };
       sendJson(res, status, responsePayload);
     } finally {
       this.logs.add({

@@ -11,6 +11,8 @@
 - 一键 CRUD：列表、详情、新增、更新、删除。
 - SQL 模板：安全绑定参数、条件标签、循环标签和显式原样拼接。
 - SELECT 分页：自动生成总数与分页查询。
+- 查询超时：全局默认值与接口级覆盖，超时返回 HTTP 504。
+- 数据源只读模式：写语句在执行前被拒绝，自动 CRUD 只生成查询接口。
 - OpenAPI 3.0 文档：`/magic/api/openapi.json`。
 - 响应模式：包装为 `{ code, message, data }`，或直接返回原始数据。
 - 调用日志：内存保留最近 200 条，不记录请求体和密码。
@@ -72,9 +74,10 @@ npm run dev
 | `ADMIN_TOKEN` | 空 | 管理 API 和 OpenAPI 文档访问令牌。为空时管理接口只允许本机回环地址访问。 |
 | `OPENAPI_TOKEN` | 空 | 生成接口的访问令牌。非空时请求需携带 `x-api-token` 或 Bearer token。 |
 | `OPENAPI_PATH` | `/openapi` | 生成接口的基础路径。 |
+| `QUERY_TIMEOUT_MS` | `30000` | 单个生成接口的数据库查询总超时，单位毫秒；设为 `0` 可关闭全局超时。 |
 | `CORS_ORIGIN` | `*` | 生成接口的 CORS 允许来源，可填逗号分隔列表；管理 API 不走该配置。 |
 | `ORACLE_THICK_MODE` | `false` | 设为 `true` 启用 `node-oracledb` Thick 模式，使用系统动态库路径中的 Oracle Client。 |
-| `ORACLE_CLIENT_LIB_DIR` | 空 | Oracle Client 库目录。配置该目录会自动启用 Thick 模式，适合 Oracle 11g。 |
+| `ORACLE_CLIENT_LIB_DIR` | 空 | Oracle Client 库目录。配置该目录会自动启用 Thick 模式，适合 Oracle 11g；Linux 上还需通过 `ldconfig` 或 `LD_LIBRARY_PATH` 提供系统动态库路径。 |
 | `STATE_FILE` | `data/state.json` | 数据源和接口定义的 JSON 存储文件。 |
 | `SECRET_FILE` | 与状态文件同目录的 `.secret` | 数据源密码加解密密钥文件，权限自动设为 `600`。 |
 | `APP_SECRET` | 空 | 可选。设置后用它派生加密密钥，不再使用 `SECRET_FILE`。 |
@@ -91,7 +94,7 @@ npm run dev
 2. 进入「数据源」，添加 MySQL 或 Oracle 连接并测试。
 3. 点击「浏览表」，选择数据表查看字段、主键和可空属性。
 4. 点击「生成 CRUD」，选择路径前缀和所需方法，预览后批量创建接口。
-5. 也可以在「接口」页新建自定义 SQL 接口，配置参数、分页、响应模式和测试值。
+5. 也可以在「接口」页新建自定义 SQL 接口，配置参数、分页、响应模式、接口超时和测试值。
 6. 在「接口文档」页复制 OpenAPI JSON 地址，或直接调用 `/openapi/*` 下的生成接口。
 
 ### MySQL 数据源
@@ -104,21 +107,43 @@ npm run dev
 
 连接 Oracle 11g 时，还需要安装 Oracle Client 库并启用 Thick 模式。通常使用可连接 11.2+ 的 Oracle 19c Instant Client：
 
-```bash
+```dotenv
+ORACLE_THICK_MODE=true
 ORACLE_CLIENT_LIB_DIR=/opt/oracle/instantclient_19_XX
 ```
 
-如果 Oracle Client 已经配置在系统动态库搜索路径中，也可以只设置：
+Linux 上还必须把 Instant Client 目录加入系统动态库路径，例如写入 `/etc/ld.so.conf.d/oracle-instantclient.conf` 后执行 `sudo ldconfig`。如果 Oracle Client 已经配置在系统动态库搜索路径中，也可以只设置：
 
-```bash
+```dotenv
 ORACLE_THICK_MODE=true
 ```
 
-修改配置后需要重启服务。Thick 模式启用后，MySQL 和 Oracle 12c+ 数据源仍可同时使用。
+修改配置后需要重启服务。完整步骤见 [docs/offline-deployment.md](docs/offline-deployment.md)。Thick 模式启用后，MySQL 和 Oracle 12c+ 数据源仍可同时使用。
 
 当前 Oracle 元数据读取按默认大写对象名处理，大小写混合的 quoted identifier 不是主要支持场景。联合主键暂不支持自动 CRUD，请改用自定义 SQL 接口；没有单列主键的表只能生成列表和新增。
 
 Oracle 11g 没有 Identity Column 元数据。由序列和触发器生成主键的表不会自动识别为自增列，自动生成的 POST 接口需要显式提交主键，或改用自定义 SQL 接口。
+
+Oracle 写操作执行时启用 `autoCommit`，单条 `INSERT`、`UPDATE`、`DELETE` 成功后立即提交。当前平台没有跨多条 SQL 的事务编排；需要事务的复杂业务应使用存储过程或其他服务实现。
+
+### 只读数据源
+
+添加或编辑数据源时可以开启「只读数据源」。开启后允许执行 `SELECT`、查询型 `WITH` 和 `EXPLAIN`，其他 SQL 在进入数据库前直接返回 HTTP `403`，错误码为 `DATASOURCE_READ_ONLY`。
+
+- 已存在的写接口不会被删除，但调用时会统一被拒绝。
+- 「生成 CRUD」对只读数据源只允许生成列表和详情接口。
+- 只读设置是应用层保护，不能替代数据库权限。生产环境仍应为只读数据源配置只有 `SELECT` 权限的数据库账号。
+
+包装模式错误示例：
+
+```json
+{
+  "code": 403,
+  "message": "数据源「只读库」已启用只读模式，只能执行查询语句",
+  "data": null,
+  "errorCode": "DATASOURCE_READ_ONLY"
+}
+```
 
 ### 同时使用 MySQL 和 Oracle
 
@@ -195,6 +220,23 @@ ORDER BY id DESC
 
 MySQL 使用 `LIMIT` / `OFFSET`；Oracle 使用兼容 11g 的 `ROWNUM` 嵌套查询，不依赖 `OFFSET ... FETCH`。
 
+### 查询超时
+
+每个生成接口默认使用 `QUERY_TIMEOUT_MS`，默认 `30000` 毫秒。接口编辑页的「接口超时（毫秒）」可单独覆盖；填 `0` 时继承全局配置。分页接口的总数查询和列表查询共享同一个超时预算，不会各算一次。
+
+超时后接口返回 HTTP `504`，错误码为 `DB_QUERY_TIMEOUT`。包装模式示例：
+
+```json
+{
+  "code": 504,
+  "message": "数据库查询超时（30000 ms）",
+  "data": null,
+  "errorCode": "DB_QUERY_TIMEOUT"
+}
+```
+
+MySQL 超时会销毁当前连接，避免仍在执行的 SQL 被放回连接池。Oracle 同时设置 `callTimeout` 并在总超时触发时调用 `breakExecution()`；真实 Oracle 11g 下的服务端中断效果仍需在数据库环境验证。若接口前面还有 Nginx 等反向代理，也要同时检查代理的读取超时。
+
 ### CRUD 生成约定
 
 - 列表：`GET /users`，支持分页和最多 6 个字符字段的关键字搜索。
@@ -262,6 +304,7 @@ x-api-token: <OPENAPI_TOKEN>
 - `#{name}` 是默认且推荐的安全绑定方式。
 - `${name}` 属于 SQL 拼接，必须由每个接口显式开启，仍可能造成 SQL 注入。
 - 生成接口使用数据源配置中的数据库账号权限执行。生产环境应使用最小权限账号，查询接口优先只读账号。
+- 「只读数据源」会在运行时拒绝非查询 SQL，但数据库账号权限仍是最终安全边界，不能只依赖该开关。
 - 数据源密码加密后写入状态文件，API 响应不会返回密码。
 - 管理令牌只保存在当前浏览器 `localStorage`，不会写入项目文件。
 - 运行时日志只在内存保存最近 200 条，服务重启后清空。
@@ -295,32 +338,15 @@ npm test
 npm run check
 ```
 
-当前自动化测试覆盖模板渲染、表达式求值、CRUD 生成、路径匹配、参数转换、密码加解密、Oracle 11g 分页与元数据兼容、Oracle Thick 模式初始化，以及应用处理器级的管理鉴权、静态页面、SQL 预览和 OpenAPI 文档生成。
+当前自动化测试覆盖模板渲染、表达式求值、CRUD 生成、路径匹配、参数转换、密码加解密、Oracle 11g 分页与元数据兼容、Oracle Thick 模式初始化、Oracle DML 自动提交、数据源只读持久化与 403 拦截、查询超时与连接中断路径，以及应用处理器级的管理鉴权、静态页面、SQL 预览、超时响应和 OpenAPI 文档生成。
 
 真实 MySQL / Oracle 连接、数据库方言执行结果、浏览器视觉回归和真实端口启动不属于当前沙箱已验证范围，需要在有数据库和网络的环境中继续联调。
 
-## 离线 npm cache
+## 内网离线部署
 
-仓库提供 `.github/workflows/build-npm-cache.yml`，在 GitHub Actions 的 Ubuntu x86_64 runner 和 Node.js 22 环境中生成面向前述 Linux x86_64 部署环境的 npm cache。
+Ubuntu 20.04 x86_64 内网部署、Node.js 离线安装、Oracle 11g / Instant Client 19c、离线 npm cache、systemd 管理、日志和排障，统一记录在：
 
-1. 将项目推送到 GitHub，私有仓库也可以。不要提交 `.env`、`data/`、`node_modules/` 等本地文件。
-2. 打开 GitHub 仓库的 Actions 页面，选择 `Build Offline npm Cache`，点击 `Run workflow`。
-3. workflow 会生成项目专属 cache，删除 `node_modules` 后用 `npm ci --offline` 重新安装，验证 MySQL/Oracle 驱动和 Linux x64 Oracle 二进制，再执行测试。
-4. 下载名为 `fastapi-npm-cache` 的 artifact，其中包含 `fastapi-npm-cache.tgz` 和对应的 SHA-256 文件。
-
-在内网服务器解压并离线安装：
-
-```bash
-sha256sum -c fastapi-npm-cache.tgz.sha256
-mkdir -p /opt/deploy
-tar -xzf fastapi-npm-cache.tgz -C /opt/deploy
-
-cd /opt/deploy/fastapi
-npm ci --offline --no-audit --no-fund \
-  --cache /opt/deploy/npm-cache
-```
-
-如果只复制完整的 `node_modules`，也可以不在内网执行 `npm install`，直接运行 `npm start`。Oracle 11g 所需的 Oracle Instant Client 仍需单独安装。
+[docs/offline-deployment.md](docs/offline-deployment.md)
 
 ## 常见问题
 
@@ -342,8 +368,12 @@ npm ci --offline --no-audit --no-fund \
 
 **Oracle 11g 提示连接失败或版本不支持**
 
-确认已安装 Oracle Client 库，并配置 `ORACLE_CLIENT_LIB_DIR`，或设置 `ORACLE_THICK_MODE=true` 后重启服务。默认 Thin 模式不能连接 Oracle 11g。
+确认已安装 Oracle Client 库，配置 `ORACLE_CLIENT_LIB_DIR` 和 `ORACLE_THICK_MODE=true`，并在 Linux 上执行 `ldconfig` 或设置 `LD_LIBRARY_PATH` 后重启服务。默认 Thin 模式不能连接 Oracle 11g。完整步骤见 [docs/offline-deployment.md](docs/offline-deployment.md)。
 
 **接口返回 502**
 
 查看「调用日志」中的错误，并先使用数据源的「测试连接」确认网络、账号和权限。数据库错误会返回执行失败信息，但不会返回数据源密码。
+
+**接口返回 504 / `DB_QUERY_TIMEOUT`**
+
+SQL 执行超过了全局 `QUERY_TIMEOUT_MS` 或接口自身配置的 `timeoutMs`。先优化 SQL、缩小结果集或补充索引；确有必要时再提高该接口的超时值。若接口经反向代理访问，确认代理超时没有更短。

@@ -11,6 +11,7 @@ test('management views render without a browser runtime', async () => {
   state.config = {
     openapiPath: '/openapi',
     openapiTokenRequired: false,
+    queryTimeoutMs: 30000,
     drivers: { mysql: true, oracle: false },
     version: '1.0.0'
   };
@@ -25,6 +26,7 @@ test('management views render without a browser runtime', async () => {
     schema: '',
     username: 'root',
     hasPassword: true,
+    readOnly: true,
     endpointCount: 1,
     updatedAt: new Date().toISOString()
   }];
@@ -56,6 +58,10 @@ test('management views render without a browser runtime', async () => {
     assert.match(html, /M21 12\.79A9 9 0 1 1 11\.21 3/);
   }
 
+  state.view = 'datasources';
+  assert.match(views.renderApp(), /readonly-badge/);
+  assert.match(views.renderApp(), /访问模式/);
+
   state.editor = {
     ...state.endpoints[0],
     testValues: '{"page":1}',
@@ -68,9 +74,13 @@ test('management views render without a browser runtime', async () => {
   const editorHtml = views.renderApp();
   assert.match(editorHtml, /在线调试/);
   assert.match(editorHtml, /预览 SQL/);
+  assert.match(editorHtml, /接口超时（毫秒）/);
+  assert.match(editorHtml, /0 = 使用全局 30000/);
 
   state.modal = { type: 'datasource', title: '添加数据源', data: { datasource: {} } };
   assert.match(views.renderModal(), /datasource-form/);
+  assert.match(views.renderModal(), /name="readOnly"/);
+  assert.match(views.renderModal(), /只读数据源/);
   state.modal = { type: 'confirm', title: '删除', message: '确认吗', data: {} };
   assert.match(views.renderModal(), /confirm-accept/);
 });

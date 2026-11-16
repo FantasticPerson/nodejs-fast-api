@@ -1,30 +1,40 @@
 import { AppError, ValidationError } from '../errors.js';
+import { isSelectSql, trimSql } from '../sql/statement.js';
 import { renderTemplate, TemplateError } from '../sql/template.js';
 import { truncate } from '../utils.js';
+import {
+  createQueryDeadline,
+  queryTimeoutError,
+  resolveQueryTimeout
+} from '../timeout.js';
 
 const PARAM_TYPES = new Set(['string', 'number', 'boolean', 'date', 'json', 'array']);
 const ORACLE_PAGE_MARKER = '__magic_row_number';
 
 export class QueryService {
-  constructor({ driverManager, endpointService }) {
+  constructor({ driverManager, endpointService, queryTimeoutMs = 30000 }) {
     this.driverManager = driverManager;
     this.endpointService = endpointService;
+    this.queryTimeoutMs = queryTimeoutMs;
   }
 
   async execute({ endpoint, datasource, sources }) {
     const built = buildContext(endpoint, sources);
     const rendered = this.render({ endpoint, datasource, context: built.context });
     const isSelect = isSelectSql(rendered.sql);
+    const deadline = createQueryDeadline(
+      resolveQueryTimeout(endpoint, this.queryTimeoutMs)
+    );
 
     try {
       if (isSelect && endpoint.pagination?.enabled) {
-        return await this.executePaginated({ endpoint, datasource, rendered, built, isSelect });
+        return await this.executePaginated({ endpoint, datasource, rendered, built, deadline });
       }
       if (isSelect) {
-        const result = await this.driverManager.execute(datasource, rendered.sql, rendered.values);
+        const result = await this.runSql(datasource, rendered.sql, rendered.values, deadline);
         return result.rows;
       }
-      const result = await this.driverManager.execute(datasource, rendered.sql, rendered.values);
+      const result = await this.runSql(datasource, rendered.sql, rendered.values, deadline);
       return {
         affectedRows: result.affectedRows,
         insertId: result.insertId ?? null
@@ -37,6 +47,10 @@ export class QueryService {
         'DB_EXECUTION_FAILED'
       );
     }
+  }
+
+  async runSql(datasource, sql, values, deadline) {
+    return this.driverManager.execute(datasource, sql, values, driverTimeoutOptions(deadline));
   }
 
   render({ endpoint, datasource, sources, context }) {
@@ -75,15 +89,15 @@ export class QueryService {
     };
   }
 
-  async executePaginated({ endpoint, datasource, rendered, built }) {
+  async executePaginated({ endpoint, datasource, rendered, built, deadline }) {
     const { page, pageSize } = built;
-    const total = await this.countRows(datasource, rendered);
+    const total = await this.countRows(datasource, rendered, deadline);
     const totalPages = total > 0 ? Math.ceil(total / pageSize) : 0;
     if (total === 0 || page > totalPages) {
       return { list: [], total, page, pageSize, totalPages };
     }
     const paged = appendPagination(rendered, page, pageSize);
-    const result = await this.driverManager.execute(datasource, paged.sql, paged.values);
+    const result = await this.runSql(datasource, paged.sql, paged.values, deadline);
     return {
       list:
         rendered.dialect === 'oracle'
@@ -96,16 +110,25 @@ export class QueryService {
     };
   }
 
-  async countRows(datasource, rendered) {
+  async countRows(datasource, rendered, deadline) {
     const countSql =
       rendered.dialect === 'oracle'
         ? `SELECT COUNT(*) AS "__magic_total" FROM (${rendered.sql}) "__magic_sub"`
         : `SELECT COUNT(*) AS __magic_total FROM (${rendered.sql}) AS __magic_sub`;
-    const result = await this.driverManager.execute(datasource, countSql, rendered.values);
+    const result = await this.runSql(datasource, countSql, rendered.values, deadline);
     const row = result.rows[0] || {};
     const key = Object.keys(row).find((item) => item.toLowerCase() === '__magic_total');
     return Number(key ? row[key] : 0) || 0;
   }
+}
+
+function driverTimeoutOptions(deadline) {
+  if (!deadline?.timeoutMs) return {};
+  if (deadline.expired()) throw queryTimeoutError(deadline.timeoutMs);
+  return {
+    timeoutMs: Math.max(1, deadline.remainingMs()),
+    totalTimeoutMs: deadline.timeoutMs
+  };
 }
 
 export function buildContext(endpoint, sources = {}) {
@@ -250,12 +273,4 @@ function stripOraclePageMarker(row) {
   const output = { ...row };
   delete output[marker];
   return output;
-}
-
-export function isSelectSql(sql) {
-  return /^\s*(select|with|explain)\b/i.test(sql);
-}
-
-export function trimSql(sql) {
-  return String(sql || '').trim().replace(/;\s*$/, '').trim();
 }

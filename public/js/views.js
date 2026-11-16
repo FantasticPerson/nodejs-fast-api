@@ -296,7 +296,7 @@ function renderRouteCard(editor) {
         <select data-field="datasourceId" data-rerender="1">
           <option value="">选择数据源</option>
           ${state.datasources
-            .map((datasource) => `<option value="${escapeHtml(datasource.id)}" ${editor.datasourceId === datasource.id ? 'selected' : ''}>${escapeHtml(datasource.name)} · ${datasource.type}</option>`)
+            .map((datasource) => `<option value="${escapeHtml(datasource.id)}" ${editor.datasourceId === datasource.id ? 'selected' : ''}>${escapeHtml(datasource.name)} · ${datasource.type}${datasource.readOnly ? ' · 只读' : ''}</option>`)
             .join('')}
         </select>
       </label>
@@ -384,6 +384,9 @@ function renderOptionsCard(editor) {
           <option value="raw" ${editor.responseMode === 'raw' ? 'selected' : ''}>直接返回 data</option>
         </select>
       </label>
+      <label class="field compact-field"><span>接口超时（毫秒）</span>
+        <input type="number" min="0" max="600000" data-field="timeoutMs" value="${escapeHtml(editor.timeoutMs || 0)}" placeholder="0 = 使用全局 ${escapeHtml(state.config.queryTimeoutMs ?? 30000)}">
+      </label>
       <div class="toggle-row">
         <div><strong>启用状态</strong><small>关闭后运行时会返回 404</small></div>
         <label class="switch"><input type="checkbox" data-field="enabled" data-rerender="1" ${editor.enabled ? 'checked' : ''}><span></span></label>
@@ -447,7 +450,10 @@ function renderDatasourceCard(datasource) {
     : `${datasource.host}:${datasource.port}/${datasource.database}`;
   return `<article class="datasource-card">
     <div class="ds-card-head">
-      <span class="db-type ${datasource.type}"><i></i>${datasource.type.toUpperCase()}</span>
+      <div class="ds-type-group">
+        <span class="db-type ${datasource.type}"><i></i>${datasource.type.toUpperCase()}</span>
+        ${datasource.readOnly ? '<span class="readonly-badge">只读</span>' : ''}
+      </div>
       <span class="endpoint-count">${formatNumber(datasource.endpointCount)} 个接口</span>
     </div>
     <h2>${escapeHtml(datasource.name)}</h2>
@@ -456,6 +462,7 @@ function renderDatasourceCard(datasource) {
       <div><span>用户</span><strong>${escapeHtml(datasource.username)}</strong></div>
       <div><span>${datasource.type === 'oracle' ? 'Schema' : '数据库'}</span><strong>${escapeHtml(datasource.type === 'oracle' ? datasource.schema || '默认' : datasource.database)}</strong></div>
       <div><span>密码</span><strong>${datasource.hasPassword ? '已加密保存' : '未设置'}</strong></div>
+      <div><span>访问模式</span><strong>${datasource.readOnly ? '只读' : '读写'}</strong></div>
       <div><span>更新</span><strong>${escapeHtml(formatDate(datasource.updatedAt))}</strong></div>
     </div>
     <div class="ds-actions">
@@ -580,6 +587,10 @@ function renderDatasourceModal(modal) {
       <label class="field field-span-2"><span>Oracle 连接字符串（可选，覆盖主机配置）</span><input name="connectString" value="${escapeHtml(ds.connectString || '')}" placeholder="host:port/service_name"></label>
       <label class="field"><span>用户名</span><input name="username" value="${escapeHtml(ds.username || '')}" placeholder="db_user"></label>
       <label class="field"><span>密码</span><input name="password" type="password" value="" placeholder="${ds.id && ds.hasPassword ? '留空则保持原密码' : '数据库密码'}"></label>
+      <div class="field field-span-2 ds-readonly-row">
+        <div><strong>只读数据源</strong><small>开启后只允许执行查询语句，写操作会在执行前被拒绝。数据库账号权限仍是最终边界。</small></div>
+        <label class="switch"><input type="checkbox" name="readOnly" ${ds.readOnly ? 'checked' : ''}><span></span></label>
+      </div>
     </div>
   </form>`;
 }
@@ -629,7 +640,7 @@ function renderGeneratorModal(modal) {
   if (!table) return '<div class="modal-loading"><span class="spinner"></span><p>读取表信息…</p></div>';
   const hasPk = table.primaryKeys?.length === 1;
   const preview = data.preview?.endpoints || [];
-  return `<div class="modal-intro">为 <code>${escapeHtml(table.schema ? table.schema + '.' + table.name : table.name)}</code> 生成标准 REST 接口。${!hasPk ? '<b class="danger-text">该表没有单列主键，只能生成列表和新增。</b>' : ''}</div>
+  return `<div class="modal-intro">为 <code>${escapeHtml(table.schema ? table.schema + '.' + table.name : table.name)}</code> 生成标准 REST 接口。${data.readOnly ? '<b class="danger-text">该数据源已启用只读模式，只能生成列表和详情接口。</b>' : !hasPk ? '<b class="danger-text">该表没有单列主键，只能生成列表和新增。</b>' : ''}</div>
   <div class="form-grid">
     <label class="field field-span-2"><span>路径前缀</span><input id="crud-path-base" value="${escapeHtml(data.pathBase || '/')}" placeholder="/users"></label>
     <div class="field field-span-2"><span>生成方法</span><div class="method-checks">
@@ -641,7 +652,7 @@ function renderGeneratorModal(modal) {
         ['delete', '删除 DELETE']
       ].map(([key, label]) => {
         const needsPk = ['get', 'update', 'delete'].includes(key);
-        const disabled = needsPk && !hasPk;
+        const disabled = (needsPk && !hasPk) || (data.readOnly && ['create', 'update', 'delete'].includes(key));
         const checked = (data.methods || []).includes(key) && !disabled;
         return `<label class="method-check ${disabled ? 'disabled' : ''}"><input type="checkbox" name="crud-method" value="${key}" ${checked ? 'checked' : ''} ${disabled ? 'disabled' : ''}><span>${label}</span></label>`;
       }).join('')}

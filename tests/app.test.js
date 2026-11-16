@@ -9,6 +9,7 @@ import { JsonStore } from '../server/store.js';
 import { SecretBox } from '../server/security/secret-box.js';
 import { DriverManager } from '../server/driver-manager.js';
 import { createApplication } from '../server/app.js';
+import { queryTimeoutError } from '../server/timeout.js';
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -24,6 +25,7 @@ async function createHarness(adminToken = '') {
     adminToken,
     openapiToken: '',
     corsOrigin: '*',
+    queryTimeoutMs: 30000,
     maxBodyBytes: 2 * 1024 * 1024,
     version: '1.0.0'
   };
@@ -153,5 +155,111 @@ test('static UI and OpenAPI document are served', async () => {
   assert.equal(spec.statusCode, 200);
   const document = JSON.parse(spec.body);
   assert.equal(document.openapi, '3.0.3');
+  await fs.rm(harness.dir, { recursive: true, force: true });
+});
+
+test('generated APIs expose DB_QUERY_TIMEOUT with HTTP 504', async () => {
+  const harness = await createHarness();
+  const now = new Date().toISOString();
+  await harness.store.mutate((state) => {
+    state.datasources.push({
+      id: 'ds_timeout',
+      name: 'timeout',
+      type: 'mysql',
+      host: '127.0.0.1',
+      port: 3306,
+      username: 'user',
+      passwordEnc: harness.secretBox.encrypt('secret'),
+      database: 'demo',
+      serviceName: '',
+      connectString: '',
+      schema: '',
+      createdAt: now,
+      updatedAt: now
+    });
+    state.endpoints.push({
+      id: 'api_timeout',
+      name: '超时接口',
+      method: 'GET',
+      path: '/slow',
+      datasourceId: 'ds_timeout',
+      sql: 'SELECT 1',
+      description: '',
+      group: '',
+      enabled: true,
+      allowRawSql: false,
+      timeoutMs: 50,
+      params: [],
+      pagination: { enabled: false, maxPageSize: 100 },
+      responseMode: 'wrap',
+      createdAt: now,
+      updatedAt: now,
+      callCount: 0,
+      lastCalledAt: null
+    });
+  });
+  harness.app.services.driverManager.execute = async () => {
+    throw queryTimeoutError(50);
+  };
+
+  const res = await invoke(harness.app.handler, { url: '/openapi/slow' });
+  assert.equal(res.statusCode, 504);
+  const payload = JSON.parse(res.body);
+  assert.equal(payload.errorCode, 'DB_QUERY_TIMEOUT');
+  assert.equal(payload.message, '数据库查询超时（50 ms）');
+  await fs.rm(harness.dir, { recursive: true, force: true });
+});
+
+test('read-only datasource rejects generated write APIs with HTTP 403', async () => {
+  const harness = await createHarness();
+  const now = new Date().toISOString();
+  await harness.store.mutate((state) => {
+    state.datasources.push({
+      id: 'ds_readonly',
+      name: '只读库',
+      type: 'mysql',
+      host: '127.0.0.1',
+      port: 3306,
+      username: 'reader',
+      passwordEnc: harness.secretBox.encrypt('secret'),
+      database: 'demo',
+      serviceName: '',
+      connectString: '',
+      schema: '',
+      readOnly: true,
+      createdAt: now,
+      updatedAt: now
+    });
+    state.endpoints.push({
+      id: 'api_readonly_write',
+      name: '禁止写入',
+      method: 'POST',
+      path: '/users',
+      datasourceId: 'ds_readonly',
+      sql: 'DELETE FROM users WHERE id = #{id}',
+      description: '',
+      group: '',
+      enabled: true,
+      allowRawSql: false,
+      timeoutMs: 0,
+      params: [{ name: 'id', in: 'body', type: 'number', required: true, defaultValue: null, description: '' }],
+      pagination: { enabled: false, maxPageSize: 100 },
+      responseMode: 'wrap',
+      createdAt: now,
+      updatedAt: now,
+      callCount: 0,
+      lastCalledAt: null
+    });
+  });
+
+  const res = await invoke(harness.app.handler, {
+    method: 'POST',
+    url: '/openapi/users',
+    body: JSON.stringify({ id: 1 })
+  });
+  assert.equal(res.statusCode, 403);
+  const payload = JSON.parse(res.body);
+  assert.equal(payload.errorCode, 'DATASOURCE_READ_ONLY');
+  assert.match(payload.message, /只读模式/);
   await fs.rm(harness.dir, { recursive: true, force: true });
 });

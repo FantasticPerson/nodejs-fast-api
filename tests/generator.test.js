@@ -80,6 +80,25 @@ test('tables without a primary key can still generate list and create', () => {
   assert.deepEqual(result.endpoints.map((item) => item.method), ['GET', 'POST']);
 });
 
+test('read-only datasource only generates query endpoints', async () => {
+  const result = buildCrudDefinitions({
+    datasource: { id: 'ds_readonly', type: 'mysql', readOnly: true },
+    table: mysqlTable(),
+    pathBase: '/users'
+  });
+  assert.deepEqual(result.endpoints.map((item) => item.method), ['GET', 'GET']);
+
+  assert.throws(
+    () => buildCrudDefinitions({
+      datasource: { id: 'ds_readonly', type: 'mysql', readOnly: true },
+      table: mysqlTable(),
+      pathBase: '/users',
+      methods: ['list', 'create']
+    }),
+    /只读模式/
+  );
+});
+
 test('slugifyTable creates stable URL names', () => {
   assert.equal(slugifyTable('USER_PROFILES'), 'user-profiles');
   assert.equal(slugifyTable('订单表'), 'resource');

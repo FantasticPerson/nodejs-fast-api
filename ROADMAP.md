@@ -1,6 +1,6 @@
 # ROADMAP
 
-更新时间：2026-11-13
+更新时间：2026-11-16
 
 ## 当前阶段
 
@@ -21,6 +21,10 @@
 - `#{name}` 安全绑定、`${name}` 显式原样拼接开关及模板错误测试。
 - `<if>`、`<choose>`、`<foreach>`、`<set>`、`<where>` 动态 SQL 标签测试。
 - 参数位置、类型转换、必填校验、默认值和分页参数测试。
+- 查询超时：全局 `QUERY_TIMEOUT_MS`、接口级 `timeoutMs`、分页共享总预算、HTTP 504 / `DB_QUERY_TIMEOUT` 响应，以及 MySQL 连接销毁和 Oracle `callTimeout` / `breakExecution()` 中断路径。
+- 管理台编辑页支持配置接口超时，管理 API 保存并回显 `timeoutMs`。
+- Oracle 非查询语句启用 `autoCommit`，通过驱动选项测试确认 DML 执行后提交。
+- 数据源支持持久化只读设置；运行时对非查询 SQL 返回 HTTP 403 / `DATASOURCE_READ_ONLY`，只读数据源的 CRUD 生成仅保留查询接口。
 - 管理 API 本机回环限制及 `ADMIN_TOKEN` 鉴权测试。
 - 生成接口的 `OPENAPI_TOKEN` 鉴权与 CORS 实现。
 - AES-256-GCM 数据源密码加密、密钥文件权限和响应脱敏测试。
@@ -28,6 +32,7 @@
 - 内存调用日志，最多保留 200 条。
 - 管理台主题切换图标改用可正常渲染的实心弯月路径，并增加渲染断言；已在 Chrome 中强制刷新后实测浅色月亮与深色太阳图标均可显示、可切换。
 - README 使用文档与本路线图。
+- 内网离线部署文档，覆盖 Node.js、Oracle Instant Client、Oracle 11g Thick 模式、离线 npm cache、systemd、日志与排障。
 
 ## 已实现，待真实数据库验证
 
@@ -36,6 +41,8 @@
 - 数据源连接测试、表列表读取和表结构读取。
 - CRUD 接口在真实数据库中的执行结果。
 - Oracle 真实数据库中的分页和 `COALESCE` NULL 绑定行为。
+- 真实 MySQL / Oracle 11g 下的慢 SQL 超时中断、连接池恢复和 Oracle `breakExecution()` 行为。
+- Oracle 真实数据库中的 DML 自动提交、回滚行为和连接池恢复。
 
 ## 已实现，待 GitHub Actions 验证
 
@@ -62,7 +69,7 @@
 - 增加 Oracle 11g 真实分页、更新置空和元数据大小写的联调测试。
 - 评估管理台对多用户、接口级权限、限流和持久化审计的需求。
 - 评估是否需要在保持核心零依赖的前提下增加 Koa/Express 外层适配。
-- 增加生产部署说明、反向代理示例和备份恢复说明。
+- 增加反向代理示例和备份恢复脚本。
 
 ## 当前阻塞
 
@@ -78,9 +85,19 @@
 - Oracle 11g 必须使用 Thick 模式；由序列和触发器生成的主键不能从元数据中自动识别。
 - 自动更新使用 `COALESCE` 保留旧值，因此不能把字段显式更新为 `NULL`。
 - 没有多用户、角色权限、租户隔离、接口级限流和持久化审计。
+- 查询超时依赖客户端中断；Oracle 11g 上的服务端 SQL 是否立即结束仍需真实数据库验证。
 - `${name}` 原样拼接需要接口级显式开启，开启后仍存在 SQL 注入风险。
 
 ## 最近验证
+
+2026-11-16：
+
+- `npm test`：47 项通过，0 失败。
+- `npm run check`：通过。
+- 针对性测试已验证超时归一化、超时错误识别、分页共享总预算、接口覆盖全局超时、MySQL 超时销毁连接、Oracle 超时调用 `breakExecution()`、接口超时持久化与非法值拒绝、编辑页超时字段渲染和生成接口 504 / `DB_QUERY_TIMEOUT` 响应。
+- 针对性测试已验证 Oracle 执行选项包含 `autoCommit: true`、只读数据源拒绝写操作且不打开连接、写请求 HTTP 403 / `DATASOURCE_READ_ONLY`、只读设置持久化与关闭、只读数据源 CRUD 生成限制，以及 SQL 注释和写 CTE 的分类。
+- 真实 MySQL / Oracle 11g 超时中断：未验证。
+- 真实 Oracle 数据库中的自动提交结果：未验证。
 
 2026-11-13：
 

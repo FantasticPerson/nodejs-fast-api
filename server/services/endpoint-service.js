@@ -10,6 +10,7 @@ import {
   normalizeEndpointPath
 } from '../path.js';
 import { compileTemplate, containsRawExpression, TemplateError } from '../sql/template.js';
+import { MAX_QUERY_TIMEOUT_MS } from '../timeout.js';
 
 const METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
 const LOCATIONS = new Set(['query', 'body', 'path', 'header']);
@@ -161,10 +162,20 @@ function normalizeEndpointCore(input = {}, state) {
     group,
     enabled: input.enabled !== false,
     allowRawSql,
+    timeoutMs: normalizeTimeout(input.timeoutMs),
     params,
     pagination,
     responseMode
   };
+}
+
+function normalizeTimeout(value) {
+  if (value === undefined || value === null || value === '') return 0;
+  const number = Number(value);
+  if (!Number.isInteger(number) || number < 0 || number > MAX_QUERY_TIMEOUT_MS) {
+    throw new ValidationError(`接口超时必须是 0 到 ${MAX_QUERY_TIMEOUT_MS} 的整数毫秒`);
+  }
+  return number;
 }
 
 function buildRecord(core, { now, id, createdAt = now, callCount = 0, lastCalledAt = null }) {

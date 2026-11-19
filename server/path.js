@@ -78,6 +78,13 @@ export function endpointPathParams(pattern) {
     .map((segment) => segment.slice(1));
 }
 
+export function endpointRouteScore(pattern) {
+  return normalizeEndpointPath(pattern)
+    .split('/')
+    .filter(Boolean)
+    .reduce((score, segment) => score + (segment.startsWith(':') ? 0 : 10), 0);
+}
+
 export function joinOpenApiPath(basePath, endpointPath) {
   const base = String(basePath || '').replace(/\/+$/, '');
   const path = String(endpointPath || '/');

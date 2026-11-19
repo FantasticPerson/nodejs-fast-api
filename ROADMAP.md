@@ -1,6 +1,6 @@
 # ROADMAP
 
-更新时间：2026-11-16
+更新时间：2026-11-19
 
 ## 当前阶段
 
@@ -12,6 +12,10 @@
 
 - Node.js ESM 服务端、管理台视图与静态资源路由。
 - 管理台接口：数据源、接口定义、SQL 预览、SQL 执行、日志和 OpenAPI JSON。
+- 状态持久化迁移到 SQLite：数据源、接口、参数和调用统计分表存储，配置写入不再全量重写 JSON 文件。
+- 首次启动支持从旧 `data/state.json` 在单个事务中导入 SQLite；失败回滚并保留旧文件，初始化标记防止重复导入。
+- `/openapi/*` 运行时改为读取内存路由索引，不再每个请求克隆全量状态；调用统计在内存累加并每 5 秒批量刷新 SQLite。
+- Node.js 运行要求更新为 `>= 22.14`，使用内置 `node:sqlite`，不增加额外运行时依赖。
 - 一键生成列表、详情、新增、更新、删除接口；MySQL / Oracle SQL 生成测试通过。
 - Oracle 11g 兼容的 `ROWNUM` 分页绑定顺序和结果字段清理测试通过。
 - Oracle `Y/N` 可空字段、大写元数据字段和主键读取测试通过。
@@ -25,10 +29,12 @@
 - 管理台编辑页支持配置接口超时，管理 API 保存并回显 `timeoutMs`。
 - Oracle 非查询语句启用 `autoCommit`，通过驱动选项测试确认 DML 执行后提交。
 - 数据源支持持久化只读设置；运行时对非查询 SQL 返回 HTTP 403 / `DATASOURCE_READ_ONLY`，只读数据源的 CRUD 生成仅保留查询接口。
+- 修复只读 SQL 分类对外层括号、括号主查询、多个 CTE、CTE 列别名和带 `UNION` 的首个 CTE 分支的误判；写语句和写 CTE 仍会被拒绝。
 - 修复 ESM 加载 CommonJS `oracledb` 时未解包 `default`、导致 `initOracleClient` 不可用的问题。
 - 增加 Oracle 独立连接诊断脚本，输出 Thick 模式状态和真实账号认证结果。
 - 修复 Oracle 连接池在认证失败时仍被缓存、导致修正密码后持续报 `ORA-01017` 的问题；连接池只在成功建立认证连接后缓存，草稿测试使用临时池并在结束后关闭。
 - Oracle 数据源增加服务名 / SID 连接方式选择，SID 使用 `HOST:PORT:SID` 拼接；相应连接串、临时池和 SID 配置均有单元测试覆盖。
+- 修复管理台 Oracle 服务名连接方式因后端大小写归一化错误而被拒绝的问题；`serviceName`、`service_name` 均保存为规范值 `serviceName`。
 - Oracle `CLOB` / `NCLOB` 结果不再把驱动 `Lob` 流对象直接交给 JSON 序列化；长 CLOB 按 32767 字符分块读取并拼接为字符串，覆盖 `GETCLOBVAL()` 和嵌套结果字段。
 - 管理台样式移除 Chrome 102 不支持的 `color-mix()` 等语法，暗黑模式背景、边框和提示色改为兼容的静态主题变量；SQL 编辑器选区改为高对比固定颜色。
 - 管理 API 本机回环限制及 `ADMIN_TOKEN` 鉴权测试。
@@ -86,7 +92,8 @@
 
 ## 已知限制
 
-- 状态存储为单进程 JSON 文件，不支持多实例并发写入。
+- 状态库使用 SQLite WAL，但应用仍以单进程内存缓存为准，不支持多实例并发管理；进程异常退出时最多丢失最近 5 秒的调用统计。
+- Node 22 的 `node:sqlite` 仍标记为实验特性，当前版本和测试通过，但后续升级 Node 时需要复查 API 兼容性。
 - 自动 CRUD 只支持单列主键；联合主键和无主键表需要自定义 SQL。
 - Oracle 默认大写对象名，大小写混合的 quoted identifier 不是主要支持路径。
 - Oracle 11g 必须使用 Thick 模式；由序列和触发器生成的主键不能从元数据中自动识别。
@@ -96,6 +103,24 @@
 - `${name}` 原样拼接需要接口级显式开启，开启后仍存在 SQL 注入风险。
 
 ## 最近验证
+
+2026-11-19：
+
+- `npm test`：59 项通过，0 失败。
+- `npm run check`：通过。
+- `git diff --check`：通过。
+- 新增 SQLite 专项测试覆盖重启后数据源、接口、参数和统计持久化，调用统计批量刷新，旧 JSON 一次性迁移，旧文件保留，以及迁移失败回滚后修复重试。
+- 使用真实 `data/state.json` 的临时副本完成迁移验证：1 个数据源、1 个接口、1 个参数、`callCount=1` 均正确导入，原 JSON 未改动。
+- 使用临时 SQLite 库在 `127.0.0.1:43119` 实际启动服务，`/magic`、`/magic/api/health`、`/magic/api/bootstrap` 和 `/magic/api/openapi.json` 均返回 HTTP 200。
+
+2026-11-17：
+
+- `npm test`：56 项通过，0 失败。
+- `npm run check`：通过。
+- `git diff --check`：通过。
+- 针对性测试已验证外层括号包裹的 CTE、括号主查询、多个 CTE、CTE 列别名、首个 CTE 分支接 `UNION` 的只读查询能够通过，括号中的 `DELETE` / `UPDATE` 和多个 CTE 后接写语句仍被拒绝。
+- 针对性测试已验证只读数据源执行括号 CTE 查询不会被 `DATASOURCE_READ_ONLY` 拦截，并确认写操作仍在打开连接前被拒绝。
+- 针对性测试已验证 Oracle 草稿测试接受管理台提交的 `serviceName`，服务名连接方式保持规范化，SID 方式不受影响。
 
 2026-11-16：
 

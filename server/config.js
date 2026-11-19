@@ -36,6 +36,10 @@ export function loadConfig(overrides = {}) {
     rootDir,
     process.env.STATE_FILE || 'data/state.json'
   );
+  const stateDb = path.resolve(
+    rootDir,
+    process.env.STATE_DB || 'data/state.sqlite'
+  );
   const secretFile = path.resolve(
     rootDir,
     process.env.SECRET_FILE || path.join(path.dirname(stateFile), '.secret')
@@ -54,6 +58,7 @@ export function loadConfig(overrides = {}) {
     queryTimeoutMs: normalizeTimeoutMs(process.env.QUERY_TIMEOUT_MS, 30000),
     openapiPath,
     managementPath: '/magic/api',
+    stateDb,
     stateFile,
     secretFile,
     maxBodyBytes: 2 * 1024 * 1024,

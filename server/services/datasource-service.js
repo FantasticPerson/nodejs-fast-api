@@ -13,10 +13,9 @@ export class DatasourceService {
   }
 
   list() {
-    const snapshot = this.store.snapshot();
-    return snapshot.datasources.map((datasource) => ({
+    return this.store.listDatasources().map((datasource) => ({
       ...sanitizeDatasource(datasource),
-      endpointCount: snapshot.endpoints.filter((endpoint) => endpoint.datasourceId === datasource.id).length
+      endpointCount: this.store.countEndpointsByDatasource(datasource.id)
     }));
   }
 
@@ -28,8 +27,7 @@ export class DatasourceService {
 
   async create(input) {
     const normalized = this.normalizeInput(input);
-    const snapshot = this.store.snapshot();
-    assertUniqueName(snapshot.datasources, normalized.name, null);
+    assertUniqueName(this.store.listDatasources(), normalized.name, null);
     const now = new Date().toISOString();
     const record = {
       id: `ds_${randomUUID().replace(/-/g, '').slice(0, 12)}`,
@@ -39,18 +37,15 @@ export class DatasourceService {
       updatedAt: now
     };
     delete record.password;
-    await this.store.mutate((state) => {
-      state.datasources.push(record);
-    });
-    return sanitizeDatasource(record);
+    const created = await this.store.insertDatasource(record);
+    return sanitizeDatasource(created);
   }
 
   async update(id, input) {
     const existing = this.store.findDatasource(id);
     if (!existing) throw new NotFoundError('数据源不存在');
     const normalized = this.normalizeInput(input);
-    const snapshot = this.store.snapshot();
-    assertUniqueName(snapshot.datasources, normalized.name, id);
+    assertUniqueName(this.store.listDatasources(), normalized.name, id);
     const update = {
       ...existing,
       ...normalized,
@@ -60,27 +55,21 @@ export class DatasourceService {
       update.passwordEnc = this.secretBox.encrypt(normalized.password);
     }
     delete update.password;
-    await this.store.mutate((state) => {
-      const index = state.datasources.findIndex((item) => item.id === id);
-      state.datasources[index] = update;
-    });
+    const saved = await this.store.updateDatasource(id, update);
     await this.driverManager.closePool(id);
-    return sanitizeDatasource(update);
+    return sanitizeDatasource(saved);
   }
 
   async remove(id) {
-    const snapshot = this.store.snapshot();
-    if (!snapshot.datasources.some((item) => item.id === id)) throw new NotFoundError('数据源不存在');
-    const usedBy = snapshot.endpoints.filter((endpoint) => endpoint.datasourceId === id);
+    if (!this.store.findDatasource(id)) throw new NotFoundError('数据源不存在');
+    const usedBy = this.store.findEndpointsByDatasource(id);
     if (usedBy.length) {
       throw new ConflictError(
         `该数据源仍被 ${usedBy.length} 个接口使用，请先删除或迁移这些接口`,
         { endpointIds: usedBy.map((endpoint) => endpoint.id) }
       );
     }
-    await this.store.mutate((state) => {
-      state.datasources = state.datasources.filter((item) => item.id !== id);
-    });
+    await this.store.deleteDatasource(id);
     await this.driverManager.closePool(id);
   }
 

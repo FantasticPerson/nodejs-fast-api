@@ -37,8 +37,7 @@ export class RuntimeHandler {
     }
 
     const relativePath = pathname.slice(this.config.openapiPath.length) || '/';
-    const state = this.store.snapshot();
-    const endpoint = this.findEndpoint(req.method, relativePath, state.endpoints);
+    const endpoint = this.findEndpoint(req.method, relativePath, this.store.getRuntimeEndpoints());
     const startedAt = Date.now();
     if (!endpoint) {
       sendJson(res, 404, { code: 404, message: '接口不存在', data: null });
@@ -108,7 +107,6 @@ export class RuntimeHandler {
     const candidates = endpoints.filter(
       (endpoint) => endpoint.enabled && endpoint.method === normalizedMethod
     );
-    candidates.sort((a, b) => routeScore(b.path) - routeScore(a.path));
     for (const endpoint of candidates) {
       const compiled = this.getRoute(endpoint);
       const params = matchCompiledPath(compiled, pathname);
@@ -125,11 +123,4 @@ export class RuntimeHandler {
     this.routeCache.set(endpoint.id, { signature, compiled });
     return compiled;
   }
-}
-
-function routeScore(path) {
-  return path
-    .split('/')
-    .filter(Boolean)
-    .reduce((score, segment) => score + (segment.startsWith(':') ? 0 : 10), 0);
 }

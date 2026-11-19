@@ -24,7 +24,7 @@ export class EndpointService {
   }
 
   list() {
-    return this.store.snapshot().endpoints;
+    return this.store.listEndpoints();
   }
 
   get(id) {
@@ -35,28 +35,26 @@ export class EndpointService {
 
   async create(input) {
     const now = new Date().toISOString();
-    const record = await this.store.mutate((state) => {
-      const core = normalizeEndpointCore(input, state);
-      assertPathAvailable(state, [core], null);
-      const created = buildRecord(core, { now, id: `api_${randomUUID().replace(/-/g, '').slice(0, 12)}` });
-      state.endpoints.push(created);
-      return created;
+    const state = this.store.validationState();
+    const core = normalizeEndpointCore(input, state);
+    assertPathAvailable(state, [core], null);
+    const created = buildRecord(core, {
+      now,
+      id: `api_${randomUUID().replace(/-/g, '').slice(0, 12)}`
     });
-    return record;
+    return this.store.insertEndpoints([created])[0];
   }
 
   async createMany(inputs) {
     if (!Array.isArray(inputs) || !inputs.length) throw new ValidationError('没有可创建的接口');
     const now = new Date().toISOString();
-    const records = await this.store.mutate((state) => {
-      const cores = inputs.map((input) => normalizeEndpointCore(input, state));
-      assertBatchPathsAvailable(state, cores);
-      const created = cores.map((core) =>
-        buildRecord(core, { now, id: `api_${randomUUID().replace(/-/g, '').slice(0, 12)}` })
-      );
-      state.endpoints.push(...created);
-      return created;
-    });
+    const state = this.store.validationState();
+    const cores = inputs.map((input) => normalizeEndpointCore(input, state));
+    assertBatchPathsAvailable(state, cores);
+    const records = cores.map((core) =>
+      buildRecord(core, { now, id: `api_${randomUUID().replace(/-/g, '').slice(0, 12)}` })
+    );
+    this.store.insertEndpoints(records);
     return records;
   }
 
@@ -64,20 +62,17 @@ export class EndpointService {
     const existing = this.store.findEndpoint(id);
     if (!existing) throw new NotFoundError('接口不存在');
     const now = new Date().toISOString();
-    const record = await this.store.mutate((state) => {
-      const core = normalizeEndpointCore(input, state);
-      assertPathAvailable(state, [core], id);
-      const updated = buildRecord(core, {
-        now,
-        id,
-        createdAt: existing.createdAt,
-        callCount: existing.callCount || 0,
-        lastCalledAt: existing.lastCalledAt || null
-      });
-      const index = state.endpoints.findIndex((item) => item.id === id);
-      state.endpoints[index] = updated;
-      return updated;
+    const state = this.store.validationState();
+    const core = normalizeEndpointCore(input, state);
+    assertPathAvailable(state, [core], id);
+    const updated = buildRecord(core, {
+      now,
+      id,
+      createdAt: existing.createdAt,
+      callCount: existing.callCount || 0,
+      lastCalledAt: existing.lastCalledAt || null
     });
+    const record = this.store.updateEndpoint(id, updated);
     this.templateCache.delete(id);
     return record;
   }
@@ -85,9 +80,7 @@ export class EndpointService {
   async remove(id) {
     const existing = this.store.findEndpoint(id);
     if (!existing) throw new NotFoundError('接口不存在');
-    await this.store.mutate((state) => {
-      state.endpoints = state.endpoints.filter((item) => item.id !== id);
-    });
+    await this.store.deleteEndpoint(id);
     this.templateCache.delete(id);
   }
 
@@ -107,12 +100,7 @@ export class EndpointService {
   }
 
   async recordCall(id) {
-    await this.store.mutate((state) => {
-      const endpoint = state.endpoints.find((item) => item.id === id);
-      if (!endpoint) return;
-      endpoint.callCount = Number(endpoint.callCount || 0) + 1;
-      endpoint.lastCalledAt = new Date().toISOString();
-    });
+    this.store.recordCall(id);
   }
 }
 

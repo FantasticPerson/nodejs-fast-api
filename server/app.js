@@ -156,13 +156,13 @@ export function createApplication({
     const instance = new Router();
 
     instance.get('/magic/api/bootstrap', async ({ res }) => {
-      const snapshot = store.snapshot();
+      const endpoints = store.listEndpoints();
       const drivers = await driverManager.driverStatus();
       sendJson(res, 200, {
         ok: true,
         data: {
           datasources: datasourceService.list(),
-          endpoints: snapshot.endpoints,
+          endpoints,
           logs: logs.list(),
           config: {
             openapiPath: config.openapiPath,
@@ -284,9 +284,8 @@ export function createApplication({
     });
 
     instance.get('/magic/api/openapi.json', async ({ res }) => {
-      const snapshot = store.snapshot();
       const document = buildOpenApiDocument({
-        endpoints: snapshot.endpoints,
+        endpoints: store.listEndpoints(),
         datasources: datasourceService.list(),
         config
       });

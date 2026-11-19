@@ -1,11 +1,11 @@
 # Node Magic API 内网离线部署指南
 
-更新时间：2026-11-16
+更新时间：2026-11-19
 
 适用环境：
 
 - 内网 Ubuntu 20.04 x86_64。
-- Node.js 20 或 22，项目要求 `>= 20`。
+- Node.js 22，项目要求 `>= 22.14`（使用内置 `node:sqlite`）。
 - MySQL 与 Oracle 可同时使用。
 - Oracle Database 11g 使用 `node-oracledb` Thick 模式和 Oracle Instant Client 19c。
 - 使用 systemd 管理服务，不依赖 PM2。
@@ -69,7 +69,7 @@ npm -v
 command -v node
 ```
 
-`/usr/local/bin` 通常优先于 `/usr/bin`。确认 `node -v` 至少为 20。
+`/usr/local/bin` 通常优先于 `/usr/bin`。确认 `node -v` 至少为 `22.14`。
 
 ## 3. 安装 Oracle Instant Client 19c
 
@@ -208,6 +208,10 @@ CORS_ORIGIN=*
 - `ORACLE_CLIENT_LIB_DIR` 指向包含 `libclntsh.so` 的 Instant Client 目录。
 - 配置 `ORACLE_CLIENT_LIB_DIR` 本身也会在项目代码中启用 Thick 模式，但建议同时显式设置 `ORACLE_THICK_MODE=true`。
 - `QUERY_TIMEOUT_MS=0` 表示关闭全局查询超时。
+- `STATE_DB` 默认是 `data/state.sqlite`，一般不需要显式配置。
+- `STATE_FILE` 默认是 `data/state.json`，只用于首次迁移旧状态，迁移后保留原文件。
+
+Node 22 启动时可能输出 `node:sqlite` 的 `ExperimentalWarning`，这是内置 SQLite 模块的运行时提示，不影响服务启动。
 
 不要提交或公开 `.env`、`data/`、`data/.secret`。
 
@@ -585,10 +589,12 @@ tar -czf /opt/backup/fastapi-data-$(date +%F-%H%M%S).tgz data
 
 需要备份：
 
-- `data/state.json`：数据源和接口定义。
+- `data/state.sqlite`：数据源、接口、参数和调用统计。
+- `data/state.sqlite-wal`、`data/state.sqlite-shm`：如果存在，必须与主库一起备份。
+- `data/state.json`：旧版 JSON 来源，首次迁移后仍建议保留。
 - `data/.secret`：数据源密码解密密钥。
 
-两者必须配套备份。只恢复状态文件而丢失密钥，已保存的数据源密码将无法解密。
+SQLite 主库、WAL 文件、旧 JSON 和密钥必须配套备份。只恢复状态库而丢失密钥，已保存的数据源密码将无法解密。最稳妥的方式是停止服务后直接打包整个 `data/` 目录；不要在有写入时单独复制主库。
 
 升级流程建议：
 
@@ -596,4 +602,5 @@ tar -czf /opt/backup/fastapi-data-$(date +%F-%H%M%S).tgz data
 2. 备份 `data/`。
 3. 更新源码与 `package-lock.json`。
 4. 使用对应版本的离线 npm cache 执行 `npm ci --offline`。
-5. 启动服务并检查健康接口、管理台和数据库连接。
+5. 启动服务。首次启动会从 `data/state.json` 在事务中导入到 `data/state.sqlite`，旧文件保留；迁移失败会回滚并拒绝启动。
+6. 检查健康接口、管理台、SQLite 状态库和数据库连接。

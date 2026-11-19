@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
-import { JsonStore } from '../server/store.js';
+import { SqliteStore } from '../server/store.js';
 import { SecretBox } from '../server/security/secret-box.js';
 import { createApplication } from '../server/app.js';
 
@@ -65,7 +65,7 @@ class DualDriverManager {
 
 test('MySQL and Oracle datasources coexist and serve endpoints at the same time', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'node-magic-dual-'));
-  const store = await new JsonStore(path.join(dir, 'state.json')).init();
+  const store = await new SqliteStore(path.join(dir, 'state.sqlite')).init();
   const secretBox = await SecretBox.create({ keyFile: path.join(dir, 'secret.bin') });
   const driverManager = new DualDriverManager();
   const config = {
@@ -82,80 +82,76 @@ test('MySQL and Oracle datasources coexist and serve endpoints at the same time'
   const app = createApplication({ config, store, secretBox, driverManager });
   const now = new Date().toISOString();
 
-  await store.mutate((state) => {
-    state.datasources.push(
-      {
-        id: 'ds_mysql',
-        name: 'MySQL Demo',
-        type: 'mysql',
-        host: '127.0.0.1',
-        port: 3306,
-        username: 'mysql_user',
-        passwordEnc: secretBox.encrypt('mysql_password'),
-        database: 'demo',
-        serviceName: '',
-        connectString: '',
-        schema: '',
-        createdAt: now,
-        updatedAt: now
-      },
-      {
-        id: 'ds_oracle',
-        name: 'Oracle Demo',
-        type: 'oracle',
-        host: '127.0.0.1',
-        port: 1521,
-        username: 'oracle_user',
-        passwordEnc: secretBox.encrypt('oracle_password'),
-        database: '',
-        serviceName: 'ORCL',
-        connectString: '',
-        schema: 'REPORT',
-        createdAt: now,
-        updatedAt: now
-      }
-    );
-    state.endpoints.push(
-      {
-        id: 'api_mysql',
-        name: 'MySQL 查询',
-        method: 'GET',
-        path: '/mysql/:id',
-        datasourceId: 'ds_mysql',
-        sql: 'SELECT id FROM users WHERE id = #{id}',
-        description: '',
-        group: '',
-        enabled: true,
-        allowRawSql: false,
-        params: [{ name: 'id', in: 'path', type: 'number', required: true, defaultValue: null, description: '' }],
-        pagination: { enabled: false, maxPageSize: 100 },
-        responseMode: 'raw',
-        createdAt: now,
-        updatedAt: now,
-        callCount: 0,
-        lastCalledAt: null
-      },
-      {
-        id: 'api_oracle',
-        name: 'Oracle 查询',
-        method: 'GET',
-        path: '/oracle/:id',
-        datasourceId: 'ds_oracle',
-        sql: 'SELECT "ID" FROM "REPORT"."USERS" WHERE "ID" = #{id}',
-        description: '',
-        group: '',
-        enabled: true,
-        allowRawSql: false,
-        params: [{ name: 'id', in: 'path', type: 'number', required: true, defaultValue: null, description: '' }],
-        pagination: { enabled: false, maxPageSize: 100 },
-        responseMode: 'raw',
-        createdAt: now,
-        updatedAt: now,
-        callCount: 0,
-        lastCalledAt: null
-      }
-    );
+  await store.insertDatasource({
+    id: 'ds_mysql',
+    name: 'MySQL Demo',
+    type: 'mysql',
+    host: '127.0.0.1',
+    port: 3306,
+    username: 'mysql_user',
+    passwordEnc: secretBox.encrypt('mysql_password'),
+    database: 'demo',
+    serviceName: '',
+    connectString: '',
+    schema: '',
+    createdAt: now,
+    updatedAt: now
   });
+  await store.insertDatasource({
+    id: 'ds_oracle',
+    name: 'Oracle Demo',
+    type: 'oracle',
+    host: '127.0.0.1',
+    port: 1521,
+    username: 'oracle_user',
+    passwordEnc: secretBox.encrypt('oracle_password'),
+    database: '',
+    serviceName: 'ORCL',
+    connectString: '',
+    schema: 'REPORT',
+    createdAt: now,
+    updatedAt: now
+  });
+  await store.insertEndpoints([
+    {
+      id: 'api_mysql',
+      name: 'MySQL 查询',
+      method: 'GET',
+      path: '/mysql/:id',
+      datasourceId: 'ds_mysql',
+      sql: 'SELECT id FROM users WHERE id = #{id}',
+      description: '',
+      group: '',
+      enabled: true,
+      allowRawSql: false,
+      params: [{ name: 'id', in: 'path', type: 'number', required: true, defaultValue: null, description: '' }],
+      pagination: { enabled: false, maxPageSize: 100 },
+      responseMode: 'raw',
+      createdAt: now,
+      updatedAt: now,
+      callCount: 0,
+      lastCalledAt: null
+    },
+    {
+      id: 'api_oracle',
+      name: 'Oracle 查询',
+      method: 'GET',
+      path: '/oracle/:id',
+      datasourceId: 'ds_oracle',
+      sql: 'SELECT "ID" FROM "REPORT"."USERS" WHERE "ID" = #{id}',
+      description: '',
+      group: '',
+      enabled: true,
+      allowRawSql: false,
+      params: [{ name: 'id', in: 'path', type: 'number', required: true, defaultValue: null, description: '' }],
+      pagination: { enabled: false, maxPageSize: 100 },
+      responseMode: 'raw',
+      createdAt: now,
+      updatedAt: now,
+      callCount: 0,
+      lastCalledAt: null
+    }
+  ]);
 
   const bootstrap = await invoke(app.handler, '/magic/api/bootstrap');
   const bootstrapPayload = JSON.parse(bootstrap.body);
@@ -179,6 +175,6 @@ test('MySQL and Oracle datasources coexist and serve endpoints at the same time'
   assert.match(driverManager.calls[0].sql, /id = \?/);
   assert.match(driverManager.calls[1].sql, /"ID" = :p0/);
 
-  await store.queue;
+  await store.close();
   await fs.rm(dir, { recursive: true, force: true });
 });

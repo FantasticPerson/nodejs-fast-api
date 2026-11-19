@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
-import { JsonStore } from '../server/store.js';
+import { SqliteStore } from '../server/store.js';
 import { SecretBox } from '../server/security/secret-box.js';
 import { DriverManager } from '../server/driver-manager.js';
 import { createApplication } from '../server/app.js';
@@ -15,7 +15,7 @@ const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
 async function createHarness(adminToken = '') {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'node-magic-app-'));
-  const store = await new JsonStore(path.join(dir, 'state.json')).init();
+  const store = await new SqliteStore(path.join(dir, 'state.sqlite')).init();
   const secretBox = await SecretBox.create({ keyFile: path.join(dir, 'secret.bin') });
   const config = {
     rootDir,
@@ -72,6 +72,7 @@ test('health endpoint is public and reports driver availability', async () => {
   assert.equal(payload.ok, true);
   assert.equal(payload.service, 'node-magic-api');
   assert.equal(typeof payload.drivers.mysql, 'boolean');
+  await harness.store.close();
   await fs.rm(harness.dir, { recursive: true, force: true });
 });
 
@@ -84,6 +85,7 @@ test('management API is limited to loopback when ADMIN_TOKEN is empty', async ()
   assert.equal(res.statusCode, 401);
   const payload = JSON.parse(res.body);
   assert.equal(payload.error.code, 'ADMIN_AUTH_REQUIRED');
+  await harness.store.close();
   await fs.rm(harness.dir, { recursive: true, force: true });
 });
 
@@ -99,28 +101,27 @@ test('ADMIN_TOKEN protects the management API', async () => {
   const payload = JSON.parse(authorized.body);
   assert.equal(payload.ok, true);
   assert.equal(payload.data.config.adminTokenRequired, true);
+  await harness.store.close();
   await fs.rm(harness.dir, { recursive: true, force: true });
 });
 
 test('console render validates templates without touching a real database', async () => {
   const harness = await createHarness();
   const now = new Date().toISOString();
-  await harness.store.mutate((state) => {
-    state.datasources.push({
-      id: 'ds_test',
-      name: 'test',
-      type: 'mysql',
-      host: '127.0.0.1',
-      port: 3306,
-      username: 'user',
-      passwordEnc: harness.secretBox.encrypt('secret'),
-      database: 'demo',
-      serviceName: '',
-      connectString: '',
-      schema: '',
-      createdAt: now,
-      updatedAt: now
-    });
+  await harness.store.insertDatasource({
+    id: 'ds_test',
+    name: 'test',
+    type: 'mysql',
+    host: '127.0.0.1',
+    port: 3306,
+    username: 'user',
+    passwordEnc: harness.secretBox.encrypt('secret'),
+    database: 'demo',
+    serviceName: '',
+    connectString: '',
+    schema: '',
+    createdAt: now,
+    updatedAt: now
   });
   const body = JSON.stringify({
     datasourceId: 'ds_test',
@@ -139,6 +140,7 @@ test('console render validates templates without touching a real database', asyn
   assert.match(payload.data.sql, /WHERE id = \?/);
   assert.deepEqual(payload.data.values, [1]);
   assert.equal(payload.data.dialect, 'mysql');
+  await harness.store.close();
   await fs.rm(harness.dir, { recursive: true, force: true });
 });
 
@@ -155,29 +157,30 @@ test('static UI and OpenAPI document are served', async () => {
   assert.equal(spec.statusCode, 200);
   const document = JSON.parse(spec.body);
   assert.equal(document.openapi, '3.0.3');
+  await harness.store.close();
   await fs.rm(harness.dir, { recursive: true, force: true });
 });
 
 test('generated APIs expose DB_QUERY_TIMEOUT with HTTP 504', async () => {
   const harness = await createHarness();
   const now = new Date().toISOString();
-  await harness.store.mutate((state) => {
-    state.datasources.push({
-      id: 'ds_timeout',
-      name: 'timeout',
-      type: 'mysql',
-      host: '127.0.0.1',
-      port: 3306,
-      username: 'user',
-      passwordEnc: harness.secretBox.encrypt('secret'),
-      database: 'demo',
-      serviceName: '',
-      connectString: '',
-      schema: '',
-      createdAt: now,
-      updatedAt: now
-    });
-    state.endpoints.push({
+  await harness.store.insertDatasource({
+    id: 'ds_timeout',
+    name: 'timeout',
+    type: 'mysql',
+    host: '127.0.0.1',
+    port: 3306,
+    username: 'user',
+    passwordEnc: harness.secretBox.encrypt('secret'),
+    database: 'demo',
+    serviceName: '',
+    connectString: '',
+    schema: '',
+    createdAt: now,
+    updatedAt: now
+  });
+  await harness.store.insertEndpoints([
+    {
       id: 'api_timeout',
       name: '超时接口',
       method: 'GET',
@@ -196,8 +199,8 @@ test('generated APIs expose DB_QUERY_TIMEOUT with HTTP 504', async () => {
       updatedAt: now,
       callCount: 0,
       lastCalledAt: null
-    });
-  });
+    }
+  ]);
   harness.app.services.driverManager.execute = async () => {
     throw queryTimeoutError(50);
   };
@@ -207,30 +210,31 @@ test('generated APIs expose DB_QUERY_TIMEOUT with HTTP 504', async () => {
   const payload = JSON.parse(res.body);
   assert.equal(payload.errorCode, 'DB_QUERY_TIMEOUT');
   assert.equal(payload.message, '数据库查询超时（50 ms）');
+  await harness.store.close();
   await fs.rm(harness.dir, { recursive: true, force: true });
 });
 
 test('read-only datasource rejects generated write APIs with HTTP 403', async () => {
   const harness = await createHarness();
   const now = new Date().toISOString();
-  await harness.store.mutate((state) => {
-    state.datasources.push({
-      id: 'ds_readonly',
-      name: '只读库',
-      type: 'mysql',
-      host: '127.0.0.1',
-      port: 3306,
-      username: 'reader',
-      passwordEnc: harness.secretBox.encrypt('secret'),
-      database: 'demo',
-      serviceName: '',
-      connectString: '',
-      schema: '',
-      readOnly: true,
-      createdAt: now,
-      updatedAt: now
-    });
-    state.endpoints.push({
+  await harness.store.insertDatasource({
+    id: 'ds_readonly',
+    name: '只读库',
+    type: 'mysql',
+    host: '127.0.0.1',
+    port: 3306,
+    username: 'reader',
+    passwordEnc: harness.secretBox.encrypt('secret'),
+    database: 'demo',
+    serviceName: '',
+    connectString: '',
+    schema: '',
+    readOnly: true,
+    createdAt: now,
+    updatedAt: now
+  });
+  await harness.store.insertEndpoints([
+    {
       id: 'api_readonly_write',
       name: '禁止写入',
       method: 'POST',
@@ -249,8 +253,8 @@ test('read-only datasource rejects generated write APIs with HTTP 403', async ()
       updatedAt: now,
       callCount: 0,
       lastCalledAt: null
-    });
-  });
+    }
+  ]);
 
   const res = await invoke(harness.app.handler, {
     method: 'POST',
@@ -261,5 +265,6 @@ test('read-only datasource rejects generated write APIs with HTTP 403', async ()
   const payload = JSON.parse(res.body);
   assert.equal(payload.errorCode, 'DATASOURCE_READ_ONLY');
   assert.match(payload.message, /只读模式/);
+  await harness.store.close();
   await fs.rm(harness.dir, { recursive: true, force: true });
 });

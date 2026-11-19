@@ -1,14 +1,16 @@
 import http from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from './config.js';
-import { JsonStore } from './store.js';
+import { SqliteStore } from './store.js';
 import { SecretBox } from './security/secret-box.js';
 import { DriverManager } from './driver-manager.js';
 import { createApplication } from './app.js';
 
 export async function startServer(overrides = {}) {
   const config = loadConfig(overrides);
-  const store = await new JsonStore(config.stateFile).init();
+  const store = await new SqliteStore(config.stateDb, {
+    legacyStateFile: config.stateFile
+  }).init();
   const secretBox = await SecretBox.create({
     keyFile: config.secretFile,
     secret: process.env.APP_SECRET || ''
@@ -26,12 +28,22 @@ export async function startServer(overrides = {}) {
   const displayHost = config.host === '0.0.0.0' ? '127.0.0.1' : config.host;
   console.log(`Node Magic API Studio: http://${displayHost}:${config.port}`);
   console.log(`Generated APIs:       http://${displayHost}:${config.port}${config.openapiPath}`);
-  return { server, config, store, secretBox, driverManager, app };
+  const statsTimer = setInterval(() => {
+    try {
+      store.flushStats();
+    } catch (error) {
+      console.error('调用统计写入 SQLite 失败：', error);
+    }
+  }, 5000);
+  statsTimer.unref();
+  return { server, config, store, secretBox, driverManager, app, statsTimer };
 }
 
 async function shutdown(runtime) {
-  await runtime.driverManager.dispose();
+  clearInterval(runtime.statsTimer);
   await new Promise((resolve) => runtime.server.close(resolve));
+  await runtime.driverManager.dispose();
+  await runtime.store.close();
 }
 
 const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];

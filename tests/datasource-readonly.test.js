@@ -5,11 +5,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { DatasourceService } from '../server/services/datasource-service.js';
 import { SecretBox } from '../server/security/secret-box.js';
-import { JsonStore } from '../server/store.js';
+import { SqliteStore } from '../server/store.js';
 
 test('datasource read-only setting is persisted and can be disabled', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'node-magic-readonly-'));
-  const store = await new JsonStore(path.join(dir, 'state.json')).init();
+  const store = await new SqliteStore(path.join(dir, 'state.sqlite')).init();
   const secretBox = await SecretBox.create({ keyFile: path.join(dir, 'secret.bin') });
   const service = new DatasourceService({
     store,
@@ -39,12 +39,13 @@ test('datasource read-only setting is persisted and can be disabled', async () =
   assert.equal(updated.readOnly, false);
   assert.equal(store.findDatasource(created.id).readOnly, false);
   assert.equal(store.findDatasource(created.id).passwordEnc !== null, true);
+  await store.close();
   await fs.rm(dir, { recursive: true, force: true });
 });
 
 test('Oracle draft tests use a temporary pool and preserve the SID connection mode', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'node-magic-oracle-draft-'));
-  const store = await new JsonStore(path.join(dir, 'state.json')).init();
+  const store = await new SqliteStore(path.join(dir, 'state.sqlite')).init();
   const secretBox = await SecretBox.create({ keyFile: path.join(dir, 'secret.bin') });
   const calls = [];
   const service = new DatasourceService({

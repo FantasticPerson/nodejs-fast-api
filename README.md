@@ -17,11 +17,13 @@
 - 响应模式：包装为 `{ code, message, data }`，或直接返回原始数据。
 - 调用日志：内存保留最近 200 条，不记录请求体和密码。
 - 密码保护：数据源密码使用 AES-256-GCM 加密保存。
+- SQLite 状态存储：数据源、接口、参数和调用统计使用 SQLite 持久化，不再全量重写 JSON 文件。
 - 零构建前端：不依赖 React/Vue，不需要单独构建静态页面。
 
 ## 技术要求
 
-- Node.js `>= 20`。
+- Node.js `>= 22.14`（使用内置 `node:sqlite`）。
+- Node 22 会把 `node:sqlite` 标记为实验特性，启动时可能输出 `ExperimentalWarning`；不影响当前功能和测试。
 - 管理台浏览器兼容 Chrome 102 及以上，样式不使用 `color-mix()` 等新版本专属语法。
 - MySQL 驱动：`mysql2`。
 - Oracle 驱动：`oracledb`。
@@ -79,15 +81,19 @@ npm run dev
 | `CORS_ORIGIN` | `*` | 生成接口的 CORS 允许来源，可填逗号分隔列表；管理 API 不走该配置。 |
 | `ORACLE_THICK_MODE` | `false` | 设为 `true` 启用 `node-oracledb` Thick 模式，使用系统动态库路径中的 Oracle Client。 |
 | `ORACLE_CLIENT_LIB_DIR` | 空 | Oracle Client 库目录。配置该目录会自动启用 Thick 模式，适合 Oracle 11g；Linux 上还需通过 `ldconfig` 或 `LD_LIBRARY_PATH` 提供系统动态库路径。 |
-| `STATE_FILE` | `data/state.json` | 数据源和接口定义的 JSON 存储文件。 |
-| `SECRET_FILE` | 与状态文件同目录的 `.secret` | 数据源密码加解密密钥文件，权限自动设为 `600`。 |
+| `STATE_DB` | `data/state.sqlite` | SQLite 状态库，保存数据源、接口、参数和调用统计。 |
+| `STATE_FILE` | `data/state.json` | 旧版 JSON 状态文件。仅在 SQLite 尚未初始化时自动导入一次，导入后原文件保留。 |
+| `SECRET_FILE` | 与旧状态文件同目录的 `.secret` | 数据源密码加解密密钥文件，权限自动设为 `600`。 |
 | `APP_SECRET` | 空 | 可选。设置后用它派生加密密钥，不再使用 `SECRET_FILE`。 |
 
 注意：
 
 - 已保存的数据源密码只能由同一个密钥解密。切换 `APP_SECRET` 或删除/替换 `SECRET_FILE` 后，需要重新编辑数据源并保存密码。
-- 状态文件适合单进程、单实例。不要同时启动多个进程写同一个 `STATE_FILE`。
+- SQLite 使用 WAL，但应用仍以单进程内存缓存为准；不要同时启动多个进程写同一个 `STATE_DB`。
+- 首次升级时，如果 SQLite 状态库尚未初始化且 `STATE_FILE` 存在，会在一个事务中导入旧 JSON。失败时回滚并拒绝启动，旧文件不会被删除。
 - 不要把管理端口直接暴露到公网。当前没有多用户、角色权限、CSRF 防护或持久化审计。
+
+升级前应停止服务并备份整个 `data/` 目录。SQLite 备份需要同时保留 `state.sqlite`、可能存在的 `state.sqlite-wal`、`state.sqlite-shm` 和 `.secret`；不要把旧 JSON 与密钥分开恢复。
 
 ## 使用流程
 
@@ -308,7 +314,7 @@ x-api-token: <OPENAPI_TOKEN>
 - `${name}` 属于 SQL 拼接，必须由每个接口显式开启，仍可能造成 SQL 注入。
 - 生成接口使用数据源配置中的数据库账号权限执行。生产环境应使用最小权限账号，查询接口优先只读账号。
 - 「只读数据源」会在运行时拒绝非查询 SQL，但数据库账号权限仍是最终安全边界，不能只依赖该开关。
-- 数据源密码加密后写入状态文件，API 响应不会返回密码。
+- 数据源密码加密后写入 SQLite 状态库，API 响应不会返回密码。
 - 管理令牌只保存在当前浏览器 `localStorage`，不会写入项目文件。
 - 运行时日志只在内存保存最近 200 条，服务重启后清空。
 - 当前版本没有租户隔离、角色权限、接口级限流、分布式锁和持久化审计，不适合直接作为公网多租户网关。
@@ -323,6 +329,7 @@ server/
   metadata.js            表、字段、主键元数据读取
   generator.js           CRUD 接口定义生成
   runtime.js             /openapi/* 运行时分发
+  store.js               SQLite 状态库、内存索引和旧 JSON 迁移
   openapi.js             OpenAPI 文档生成
   services/              数据源、接口定义、查询、CRUD 业务逻辑
   sql/                   模板解析、表达式求值、标识符处理
@@ -331,7 +338,7 @@ public/
   js/                    原生 ESM 前端模块
   styles.css             管理台样式
 tests/                   Node 内置测试
-data/                    运行期状态文件和密钥文件，默认不提交
+data/                    SQLite 状态库、旧 JSON、WAL 文件和密钥文件，默认不提交
 ```
 
 ## 验证
@@ -341,7 +348,7 @@ npm test
 npm run check
 ```
 
-当前自动化测试覆盖模板渲染、表达式求值、CRUD 生成、路径匹配、参数转换、密码加解密、Oracle 11g 分页与元数据兼容、Oracle Thick 模式初始化、Oracle DML 自动提交、数据源只读持久化与 403 拦截、查询超时与连接中断路径，以及应用处理器级的管理鉴权、静态页面、SQL 预览、超时响应和 OpenAPI 文档生成。
+当前自动化测试覆盖模板渲染、表达式求值、CRUD 生成、路径匹配、参数转换、密码加解密、SQLite 重启持久化与统计批量刷新、旧 JSON 迁移及失败回滚、Oracle 11g 分页与元数据兼容、Oracle Thick 模式初始化、Oracle DML 自动提交、数据源只读持久化与 403 拦截、查询超时与连接中断路径，以及应用处理器级的管理鉴权、静态页面、SQL 预览、超时响应和 OpenAPI 文档生成。
 
 真实 MySQL / Oracle 连接、数据库方言执行结果、浏览器视觉回归和真实端口启动不属于当前沙箱已验证范围，需要在有数据库和网络的环境中继续联调。
 

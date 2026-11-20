@@ -74,5 +74,41 @@ test('Oracle draft tests use a temporary pool and preserve the SID connection mo
   assert.equal(calls.length, 1);
   assert.equal(calls[0].datasource.connectionType, 'sid');
   assert.deepEqual(calls[0].options, { ephemeral: true });
+  await store.close();
+  await fs.rm(dir, { recursive: true, force: true });
+});
+
+test('Oracle draft tests accept the service-name connection mode from the UI', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'node-magic-oracle-service-'));
+  const store = await new SqliteStore(path.join(dir, 'state.sqlite')).init();
+  const secretBox = await SecretBox.create({ keyFile: path.join(dir, 'secret.bin') });
+  const calls = [];
+  const service = new DatasourceService({
+    store,
+    secretBox,
+    driverManager: {
+      async test(datasource, options) {
+        calls.push({ datasource, options });
+        return { ok: true, type: 'oracle', currentUser: 'APP_USER' };
+      },
+      async closePool() {}
+    }
+  });
+
+  await service.testDraft({
+    type: 'oracle',
+    name: 'Oracle Service Name',
+    host: '10.0.0.10',
+    port: '1521',
+    username: 'app_user',
+    password: 'secret',
+    serviceName: 'APPDB',
+    connectionType: 'serviceName'
+  });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].datasource.connectionType, 'serviceName');
+  assert.deepEqual(calls[0].options, { ephemeral: true });
+  await store.close();
   await fs.rm(dir, { recursive: true, force: true });
 });

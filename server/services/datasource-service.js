@@ -177,10 +177,10 @@ function sanitizeDatasource(datasource) {
 
 function normalizeOracleConnectionType(value) {
   const connectionType = String(value || 'serviceName').trim().toLowerCase();
-  if (!['serviceName', 'sid'].includes(connectionType)) {
-    throw new ValidationError('Oracle 连接方式必须是服务名或 SID');
-  }
-  return connectionType;
+  const normalized = connectionType.replace(/[_-]+/g, '');
+  if (normalized === 'servicename') return 'serviceName';
+  if (normalized === 'sid') return 'sid';
+  throw new ValidationError('Oracle 连接方式必须是服务名或 SID');
 }
 
 function assertUniqueName(datasources, name, currentId) {

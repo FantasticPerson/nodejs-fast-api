@@ -284,4 +284,12 @@ test('read-only datasource rejects writes before opening a connection', async ()
   );
   assert.deepEqual(result.rows, [{ id: 1 }]);
   assert.equal(opened, 1);
+
+  const cteResult = await manager.execute(
+    { id: 'ds_readonly', name: '只读库', type: 'mysql', readOnly: true },
+    '(WITH users AS (SELECT id FROM users) SELECT * FROM users)',
+    []
+  );
+  assert.deepEqual(cteResult.rows, [{ id: 1 }]);
+  assert.equal(opened, 2);
 });

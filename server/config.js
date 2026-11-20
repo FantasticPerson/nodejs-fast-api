@@ -56,6 +56,18 @@ export function loadConfig(overrides = {}) {
     oracleThickMode: parseBoolean(process.env.ORACLE_THICK_MODE, false),
     oracleClientLibDir: (process.env.ORACLE_CLIENT_LIB_DIR || '').trim(),
     queryTimeoutMs: normalizeTimeoutMs(process.env.QUERY_TIMEOUT_MS, 30000),
+    scriptTimeoutMs: normalizeTimeoutMs(process.env.SCRIPT_TIMEOUT_MS, 30000),
+    scriptHttpAllowlist: parseList(process.env.SCRIPT_HTTP_ALLOWLIST),
+    scriptHttpMaxResponseBytes: parsePositiveInteger(
+      process.env.SCRIPT_HTTP_MAX_RESPONSE_BYTES,
+      1024 * 1024,
+      { min: 1, max: 20 * 1024 * 1024 }
+    ),
+    scriptWorkerMemoryMb: parsePositiveInteger(process.env.SCRIPT_WORKER_MEMORY_MB, 128, {
+      min: 8,
+      max: 1024
+    }),
+    pluginsDir: path.resolve(rootDir, process.env.PLUGINS_DIR || 'plugins'),
     openapiPath,
     managementPath: '/magic/api',
     stateDb,
@@ -70,4 +82,12 @@ export function loadConfig(overrides = {}) {
 function parseBoolean(value, fallback = false) {
   if (value === undefined || value === null || value === '') return fallback;
   return ['1', 'true', 'yes', 'on'].includes(String(value).trim().toLowerCase());
+}
+
+function parseList(value) {
+  if (!value) return [];
+  return String(value)
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
 }

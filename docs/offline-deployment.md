@@ -197,6 +197,10 @@ ORACLE_CLIENT_LIB_DIR=/opt/oracle/instantclient_19_33
 
 OPENAPI_PATH=/openapi
 QUERY_TIMEOUT_MS=30000
+SCRIPT_TIMEOUT_MS=30000
+SCRIPT_HTTP_ALLOWLIST=
+SCRIPT_WORKER_MEMORY_MB=128
+PLUGINS_DIR=plugins
 CORS_ORIGIN=*
 ```
 
@@ -208,6 +212,9 @@ CORS_ORIGIN=*
 - `ORACLE_CLIENT_LIB_DIR` 指向包含 `libclntsh.so` 的 Instant Client 目录。
 - 配置 `ORACLE_CLIENT_LIB_DIR` 本身也会在项目代码中启用 Thick 模式，但建议同时显式设置 `ORACLE_THICK_MODE=true`。
 - `QUERY_TIMEOUT_MS=0` 表示关闭全局查询超时。
+- `SCRIPT_TIMEOUT_MS` 是脚本接口默认执行超时；接口级 `timeoutMs` 可覆盖。
+- `SCRIPT_HTTP_ALLOWLIST` 为空时脚本接口不能访问任何外部 HTTP。需要调用外部服务时填写逗号分隔的域名，并同时开启接口的「允许外部 HTTP」。
+- `PLUGINS_DIR` 指向可信服务端插件目录。插件文件由部署人员维护，修改后需要重启进程。
 - `STATE_DB` 默认是 `data/state.sqlite`，一般不需要显式配置。
 - `STATE_FILE` 默认是 `data/state.json`，只用于首次迁移旧状态，迁移后保留原文件。
 

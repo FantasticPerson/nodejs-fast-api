@@ -11,6 +11,7 @@ document.documentElement.dataset.theme = state.theme;
 function applyBootstrap(data) {
   state.datasources = data.datasources || [];
   state.endpoints = data.endpoints || [];
+  state.scripts = data.scripts || [];
   state.logs = data.logs || [];
   state.config = {
     ...state.config,
@@ -63,6 +64,11 @@ function attachTransientListeners() {
   if (sqlInput) {
     sqlInput.addEventListener('scroll', () => actions.syncGutter(sqlInput), { passive: true });
     actions.syncGutter(sqlInput);
+  }
+  const scriptInput = document.getElementById('script-input');
+  if (scriptInput) {
+    scriptInput.addEventListener('scroll', () => actions.syncGutter(scriptInput), { passive: true });
+    actions.syncGutter(scriptInput);
   }
 }
 

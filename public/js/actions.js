@@ -76,6 +76,9 @@ export function createActions({ render, refreshData, boot }) {
           render();
           break;
         }
+        case 'editor-versions':
+          await openVersions('endpoint', state.editor?.id);
+          break;
         case 'api-toggle': {
           const endpoint = state.endpoints.find((item) => item.id === target.dataset.id);
           if (!endpoint) return;
@@ -155,6 +158,48 @@ export function createActions({ render, refreshData, boot }) {
             data: { datasource: {} }
           };
           render();
+          break;
+        case 'script-new':
+          state.modal = {
+            type: 'script-library',
+            title: '新建共享脚本',
+            eyebrow: 'SHARED SCRIPT',
+            size: 'wide',
+            data: { script: { enabled: true }, existing: false }
+          };
+          render();
+          break;
+        case 'script-edit': {
+          const script = state.scripts.find((item) => item.name === target.dataset.name);
+          if (!script) return;
+          state.modal = {
+            type: 'script-library',
+            title: `编辑共享脚本 · ${script.name}`,
+            eyebrow: 'SHARED SCRIPT',
+            size: 'wide',
+            data: { script, existing: true }
+          };
+          render();
+          break;
+        }
+        case 'script-save':
+          await saveScriptLibrary(target);
+          break;
+        case 'script-versions':
+          await openVersions('script', target.dataset.name);
+          break;
+        case 'script-delete':
+          openConfirm({
+            title: '删除共享脚本',
+            message: `确定删除共享脚本「${target.dataset.name}」吗？引用它的接口脚本会在运行时失败。`,
+            confirmAction: 'delete-script',
+            id: target.dataset.name,
+            confirmLabel: '删除共享脚本',
+            danger: true
+          });
+          break;
+        case 'version-restore':
+          await restoreVersion(target);
           break;
         case 'ds-edit': {
           const datasource = state.datasources.find((item) => item.id === target.dataset.id);
@@ -265,7 +310,7 @@ export function createActions({ render, refreshData, boot }) {
     }
     if (target.dataset.field && state.editor) {
       syncEditorField(target);
-      if (target.dataset.field === 'sql') syncGutter(target);
+      if (target.dataset.field === 'sql' || target.dataset.field === 'scriptCode') syncGutter(target);
     }
   }
 
@@ -299,7 +344,11 @@ export function createActions({ render, refreshData, boot }) {
     if (!editor) return;
     if (!editor.datasourceId) throw new Error('请先选择数据源');
     if (!String(editor.path || '').trim()) throw new Error('接口路径不能为空');
-    if (!String(editor.sql || '').trim()) throw new Error('SQL 不能为空');
+    if (editor.engine === 'script') {
+      if (!String(editor.scriptCode || '').trim()) throw new Error('脚本代码不能为空');
+    } else if (!String(editor.sql || '').trim()) {
+      throw new Error('SQL 不能为空');
+    }
     setBusy(button, true, '保存中…');
     const payload = editorPayload(editor);
     if (editor.id) await api.updateEndpoint(editor.id, payload);
@@ -317,6 +366,9 @@ export function createActions({ render, refreshData, boot }) {
       path: editor.path,
       datasourceId: editor.datasourceId,
       sql: editor.sql,
+      engine: editor.engine || 'sql',
+      scriptCode: editor.scriptCode || '',
+      allowHttp: Boolean(editor.allowHttp),
       description: editor.description,
       group: editor.group,
       enabled: editor.enabled,
@@ -341,6 +393,7 @@ export function createActions({ render, refreshData, boot }) {
   async function renderEditorSql(button) {
     const editor = state.editor;
     if (!editor) return;
+    if (editor.engine === 'script') throw new Error('脚本接口没有 SQL 预览');
     const values = readTestValues();
     setBusy(button, true, '生成中…');
     editor.renderResponse = await api.renderSql(previewPayload(editor, values));
@@ -353,7 +406,14 @@ export function createActions({ render, refreshData, boot }) {
     if (!editor) return;
     const values = readTestValues();
     setBusy(button, true, '运行中…');
-    editor.testResponse = await api.runSql(previewPayload(editor, values));
+    const result = await api.runSql(previewPayload(editor, values));
+    if (editor.engine === 'script') {
+      editor.testResponse = result?.result ?? null;
+      editor.scriptLogs = result?.logs || [];
+    } else {
+      editor.testResponse = result;
+      editor.scriptLogs = [];
+    }
     setBusy(button, false);
     render();
   }
@@ -364,7 +424,10 @@ export function createActions({ render, refreshData, boot }) {
     if (!('pageSize' in merged)) merged.pageSize = Number(editor.testPageSize) || 20;
     return {
       datasourceId: editor.datasourceId,
+      engine: editor.engine || 'sql',
       sql: editor.sql,
+      scriptCode: editor.scriptCode || '',
+      allowHttp: Boolean(editor.allowHttp),
       params: editor.params,
       allowRawSql: editor.allowRawSql,
       timeoutMs: Number(editor.timeoutMs) || 0,
@@ -390,13 +453,16 @@ export function createActions({ render, refreshData, boot }) {
   }
 
   function insertSnippet(snippet) {
-    const area = document.getElementById('sql-input');
+    const area = document.getElementById(`${
+      state.editor?.engine === 'script' ? 'script-input' : 'sql-input'
+    }`);
     if (!area || !state.editor) return;
     const start = area.selectionStart || 0;
     const end = area.selectionEnd || 0;
     const value = area.value;
     const next = `${value.slice(0, start)}${snippet}${value.slice(end)}`;
-    state.editor.sql = next;
+    const field = state.editor.engine === 'script' ? 'scriptCode' : 'sql';
+    state.editor[field] = next;
     area.value = next;
     area.focus();
     area.selectionStart = area.selectionEnd = start + snippet.length;
@@ -460,6 +526,50 @@ export function createActions({ render, refreshData, boot }) {
     state.modal = null;
     await refreshData();
     showToast(`数据源「${datasource.name}」已保存`, 'success');
+  }
+
+  async function saveScriptLibrary(button) {
+    const form = document.getElementById('script-library-form');
+    if (!form) return;
+    const input = formObject(form);
+    input.enabled = input.enabled !== 'false';
+    const existing = state.modal?.data?.existing;
+    const name = state.modal?.data?.script?.name;
+    setBusy(button, true, '保存中…');
+    const script = existing
+      ? await api.updateScript(name, input)
+      : await api.createScript(input);
+    state.modal = null;
+    await refreshData();
+    showToast(`共享脚本「${script.name}」已保存`, 'success');
+  }
+
+  async function openVersions(kind, target) {
+    if (!target) throw new Error('缺少版本对象');
+    const versions =
+      kind === 'endpoint'
+        ? await api.listEndpointVersions(target)
+        : await api.listScriptVersions(target);
+    state.modal = {
+      type: 'versions',
+      title: kind === 'endpoint' ? '接口历史版本' : '共享脚本历史版本',
+      eyebrow: 'VERSIONS',
+      size: 'wide',
+      data: { kind, target, versions }
+    };
+    render();
+  }
+
+  async function restoreVersion(button) {
+    const kind = button.dataset.kind;
+    const target = button.dataset.target;
+    const version = Number(button.dataset.version);
+    setBusy(button, true, '恢复中…');
+    if (kind === 'endpoint') await api.restoreEndpointVersion(target, version);
+    else await api.restoreScriptVersion(target, version);
+    state.modal = null;
+    await refreshData();
+    showToast(`已恢复到版本 v${version}`, 'success');
   }
 
   async function testDraftDatasource(button) {
@@ -639,6 +749,13 @@ export function createActions({ render, refreshData, boot }) {
       showToast('数据源已删除');
       return;
     }
+    if (action === 'delete-script') {
+      await api.deleteScript(modal.data.id);
+      state.modal = null;
+      await refreshData();
+      showToast('共享脚本已删除');
+      return;
+    }
     if (action === 'clear-logs') {
       await api.clearLogs();
       state.modal = null;
@@ -671,7 +788,7 @@ export function createActions({ render, refreshData, boot }) {
       state.editor.pagination.enabled = target.checked;
     } else if (field === 'pageMax') {
       state.editor.pagination.maxPageSize = Number(target.value) || 100;
-    } else if (field === 'allowRawSql' || field === 'enabled') {
+    } else if (field === 'allowRawSql' || field === 'allowHttp' || field === 'enabled') {
       state.editor[field] = target.checked;
     } else if (field === 'timeoutMs') {
       state.editor.timeoutMs = Math.max(0, Number(target.value) || 0);
@@ -708,7 +825,9 @@ export function createActions({ render, refreshData, boot }) {
   }
 
   function syncGutter(textarea) {
-    const gutter = document.getElementById('sql-gutter');
+    const gutter = document.getElementById(
+      textarea.id === 'script-input' ? 'script-gutter' : 'sql-gutter'
+    );
     if (!gutter) return;
     const count = Math.max(1, textarea.value.split('\n').length);
     gutter.textContent = Array.from({ length: count }, (_, index) => index + 1).join('\n');

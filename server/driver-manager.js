@@ -144,6 +144,111 @@ export class DriverManager {
     }
   }
 
+  async openTransaction(datasource, { timeoutMs = 0, fetchArraySize = 100 } = {}) {
+    const deadline = createQueryDeadline(normalizeTimeoutMs(timeoutMs, 0));
+    const entry = await this.getPool(datasource);
+    let connection = null;
+    let closed = false;
+    let broken = false;
+    if (entry.type === 'mysql') {
+      connection = await entry.pool.getConnection();
+      await connection.beginTransaction();
+    } else {
+      connection = await entry.pool.getConnection();
+    }
+
+    const assertOpen = () => {
+      if (closed) throw new AppError('数据库事务已关闭', 500, 'DB_TRANSACTION_CLOSED');
+      if (deadline.expired()) throw queryTimeoutError(deadline.timeoutMs);
+    };
+
+    const execute = async (sql, values = []) => {
+      assertOpen();
+      if (parseBoolean(datasource.readOnly, false) && !isSelectSql(sql)) {
+        throw new AppError(
+          `数据源「${datasource.name || datasource.id}」已启用只读模式，只能执行查询语句`,
+          403,
+          'DATASOURCE_READ_ONLY'
+        );
+      }
+      try {
+        if (entry.type === 'mysql') {
+          const queryOptions = { sql, values };
+          if (deadline.timeoutMs) queryOptions.timeout = Math.max(1, deadline.remainingMs());
+          const [rows] = await connection.execute(queryOptions, []);
+          if (Array.isArray(rows)) {
+            return { rows: jsonSafe(rows), affectedRows: 0, insertId: null };
+          }
+          return {
+            rows: [],
+            affectedRows: Number(rows.affectedRows || 0),
+            insertId: rows.insertId ?? null
+          };
+        }
+        const binds = {};
+        values.forEach((value, index) => {
+          binds[`p${index}`] = normalizeOracleBind(value);
+        });
+        if (deadline.timeoutMs) connection.callTimeout = Math.max(1, deadline.remainingMs());
+        const result = await connection.execute(sql, binds, {
+          outFormat: entry.oracledb.OUT_FORMAT_OBJECT,
+          fetchArraySize,
+          autoCommit: false
+        });
+        const rows = await normalizeOracleRows(result.rows || [], entry.oracledb);
+        return {
+          rows: jsonSafe(rows),
+          affectedRows: Number(result.rowsAffected || 0),
+          insertId: null
+        };
+      } catch (error) {
+        if (isDriverTimeoutError(error)) broken = true;
+        if (error instanceof AppError) throw error;
+        throw new AppError(
+          `数据库事务执行失败：${truncate(error?.message || error, 500)}`,
+          502,
+          'DB_EXECUTION_FAILED'
+        );
+      }
+    };
+
+    const commit = async () => {
+      assertOpen();
+      try {
+        await connection.commit();
+      } catch (error) {
+        broken = true;
+        throw new AppError(
+          `数据库事务提交失败：${truncate(error?.message || error, 500)}`,
+          502,
+          'DB_TRANSACTION_FAILED'
+        );
+      }
+    };
+
+    const rollback = async () => {
+      if (closed) return;
+      try {
+        await connection.rollback();
+      } catch {
+        broken = true;
+      }
+    };
+
+    const close = async () => {
+      if (closed) return;
+      closed = true;
+      if (entry.type === 'mysql') {
+        if (broken) connection.destroy();
+        else connection.release();
+      } else {
+        await connection.close({ drop: broken }).catch(() => {});
+      }
+    };
+
+    return { execute, commit, rollback, close, broken: () => broken };
+  }
+
   async executeMysql(entry, sql, values, deadline, control) {
     let connection = null;
     let destroyed = false;

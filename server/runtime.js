@@ -13,11 +13,12 @@ import { safeTokenEqual } from './auth.js';
 import { truncate } from './utils.js';
 
 export class RuntimeHandler {
-  constructor({ config, store, datasourceService, queryService, endpointService, logs }) {
+  constructor({ config, store, datasourceService, queryService, scriptService, endpointService, logs }) {
     this.config = config;
     this.store = store;
     this.datasourceService = datasourceService;
     this.queryService = queryService;
+    this.scriptService = scriptService;
     this.endpointService = endpointService;
     this.logs = logs;
     this.routeCache = new Map();
@@ -54,11 +55,20 @@ export class RuntimeHandler {
         headers: normalizeHeaders(req.headers)
       };
       const datasource = await this.datasourceService.resolveById(endpoint.record.datasourceId);
-      const payload = await this.queryService.execute({
-        endpoint: endpoint.record,
-        datasource,
-        sources
-      });
+      const payload =
+        endpoint.record.engine === 'script'
+          ? (
+              await this.scriptService.execute({
+                endpoint: endpoint.record,
+                datasource,
+                sources
+              })
+            ).value
+          : await this.queryService.execute({
+              endpoint: endpoint.record,
+              datasource,
+              sources
+            });
       const responsePayload =
         endpoint.record.responseMode === 'raw'
           ? payload

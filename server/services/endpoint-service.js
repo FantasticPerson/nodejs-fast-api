@@ -16,6 +16,7 @@ const METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
 const LOCATIONS = new Set(['query', 'body', 'path', 'header']);
 const PARAM_TYPES = new Set(['string', 'number', 'boolean', 'date', 'json', 'array']);
 const PARAM_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const MAX_SCRIPT_CODE_LENGTH = 65536;
 
 export class EndpointService {
   constructor({ store }) {
@@ -84,7 +85,29 @@ export class EndpointService {
     this.templateCache.delete(id);
   }
 
+  listVersions(id) {
+    if (!this.store.findEndpoint(id)) throw new NotFoundError('接口不存在');
+    return this.store.listEndpointVersions(id);
+  }
+
+  async restoreVersion(id, version) {
+    const existing = this.store.findEndpoint(id);
+    if (!existing) throw new NotFoundError('接口不存在');
+    const selected = this.store.findEndpointVersion(id, version);
+    if (!selected) throw new NotFoundError('接口版本不存在');
+    const { definition } = selected;
+    return this.update(id, {
+      ...definition,
+      id: undefined,
+      callCount: undefined,
+      lastCalledAt: undefined
+    });
+  }
+
   getTemplate(endpoint) {
+    if (endpoint.engine === 'script') {
+      throw new ValidationError('脚本接口没有 SQL 模板');
+    }
     const cacheKey = `${endpoint.id}:${endpoint.updatedAt}:${endpoint.sql.length}:${endpoint.sql.slice(0, 24)}`;
     const cached = this.templateCache.get(endpoint.id);
     if (cached?.key === cacheKey) return cached.ast;
@@ -105,6 +128,8 @@ export class EndpointService {
 }
 
 function normalizeEndpointCore(input = {}, state) {
+  const engine = String(input.engine || 'sql').toLowerCase();
+  if (!['sql', 'script'].includes(engine)) throw new ValidationError('接口引擎必须是 sql 或 script');
   const method = String(input.method || 'GET').toUpperCase();
   if (!METHODS.has(method)) throw new ValidationError('HTTP 方法不受支持');
   const path = normalizeEndpointPath(input.path);
@@ -113,17 +138,25 @@ function normalizeEndpointCore(input = {}, state) {
   if (!state.datasources.some((item) => item.id === datasourceId)) {
     throw new ValidationError('选择的数据源不存在');
   }
-  const sql = String(input.sql || '').trim();
-  if (!sql) throw new ValidationError('SQL 不能为空');
-  const allowRawSql = Boolean(input.allowRawSql);
-  if (!allowRawSql && containsRawExpression(sql)) {
+  const rawSql = String(input.sql || '');
+  const scriptCode = String(input.scriptCode ?? '');
+  if (engine === 'script' && !scriptCode.trim()) throw new ValidationError('脚本代码不能为空');
+  if (scriptCode.length > MAX_SCRIPT_CODE_LENGTH) {
+    throw new ValidationError(`脚本代码不能超过 ${MAX_SCRIPT_CODE_LENGTH} 个字符`);
+  }
+  const sql = engine === 'sql' ? rawSql.trim() : rawSql;
+  if (engine === 'sql' && !sql) throw new ValidationError('SQL 不能为空');
+  const allowRawSql = engine === 'sql' && Boolean(input.allowRawSql);
+  if (engine === 'sql' && !allowRawSql && containsRawExpression(sql)) {
     throw new ValidationError('SQL 中包含 ${} 原样拼接，请先开启“允许原样 SQL”');
   }
-  try {
-    compileTemplate(sql);
-  } catch (error) {
-    if (error instanceof TemplateError) throw new ValidationError(error.message);
-    throw error;
+  if (engine === 'sql') {
+    try {
+      compileTemplate(sql);
+    } catch (error) {
+      if (error instanceof TemplateError) throw new ValidationError(error.message);
+      throw error;
+    }
   }
 
   const params = normalizeParams(input.params, path);
@@ -136,7 +169,7 @@ function normalizeEndpointCore(input = {}, state) {
   const responseMode = input.responseMode === 'raw' ? 'raw' : 'wrap';
   const paginationInput = input.pagination || {};
   const pagination = {
-    enabled: Boolean(paginationInput.enabled),
+    enabled: engine === 'sql' && Boolean(paginationInput.enabled),
     maxPageSize: clampInteger(paginationInput.maxPageSize, 100, 1, 5000)
   };
 
@@ -146,6 +179,9 @@ function normalizeEndpointCore(input = {}, state) {
     path,
     datasourceId,
     sql,
+    engine,
+    scriptCode,
+    allowHttp: engine === 'script' && Boolean(input.allowHttp),
     description,
     group,
     enabled: input.enabled !== false,

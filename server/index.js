@@ -20,6 +20,7 @@ export async function startServer(overrides = {}) {
     oracleClientLibDir: config.oracleClientLibDir
   });
   const app = createApplication({ config, store, secretBox, driverManager });
+  await app.services.pluginRegistry.load();
   const server = http.createServer(app.handler);
   await new Promise((resolve, reject) => {
     server.once('error', reject);

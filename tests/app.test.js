@@ -144,6 +144,77 @@ test('console render validates templates without touching a real database', asyn
   await fs.rm(harness.dir, { recursive: true, force: true });
 });
 
+test('script endpoints execute through the OpenAPI runtime and console', async () => {
+  const harness = await createHarness();
+  const now = new Date().toISOString();
+  await harness.store.insertDatasource({
+    id: 'ds_script',
+    name: 'script-db',
+    type: 'mysql',
+    host: '127.0.0.1',
+    port: 3306,
+    username: 'user',
+    passwordEnc: harness.secretBox.encrypt('secret'),
+    database: 'demo',
+    serviceName: '',
+    connectString: '',
+    schema: '',
+    createdAt: now,
+    updatedAt: now
+  });
+  harness.store.insertEndpoints([
+    {
+      id: 'api_script',
+      name: 'Script endpoint',
+      method: 'GET',
+      path: '/script',
+      datasourceId: 'ds_script',
+      sql: '',
+      engine: 'script',
+      scriptCode: 'return { id: ctx.params.id, source: "runtime" };',
+      description: '',
+      group: '',
+      enabled: true,
+      allowRawSql: false,
+      allowHttp: false,
+      timeoutMs: 5000,
+      params: [{ name: 'id', in: 'query', type: 'number', required: true }],
+      pagination: { enabled: false, maxPageSize: 100 },
+      responseMode: 'wrap',
+      createdAt: now,
+      updatedAt: now
+    }
+  ]);
+
+  const runtime = await invoke(harness.app.handler, { url: '/openapi/script?id=9' });
+  assert.equal(runtime.statusCode, 200);
+  assert.deepEqual(JSON.parse(runtime.body), {
+    code: 0,
+    message: 'ok',
+    data: { id: 9, source: 'runtime' }
+  });
+
+  const consoleRun = await invoke(harness.app.handler, {
+    method: 'POST',
+    url: '/magic/api/console/run',
+    body: JSON.stringify({
+      datasourceId: 'ds_script',
+      engine: 'script',
+      scriptCode: 'return { id: ctx.params.id };',
+      params: [{ name: 'id', in: 'query', type: 'number' }],
+      values: { id: 11 },
+      timeoutMs: 5000
+    })
+  });
+  assert.equal(consoleRun.statusCode, 200);
+  assert.deepEqual(JSON.parse(consoleRun.body).data, {
+    result: { id: 11 },
+    logs: []
+  });
+  await harness.store.close();
+  await fs.rm(harness.dir, { recursive: true, force: true });
+});
+
 test('static UI and OpenAPI document are served', async () => {
   const harness = await createHarness();
   const page = await invoke(harness.app.handler, { url: '/' });

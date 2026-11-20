@@ -2,12 +2,17 @@ export const state = {
   view: 'apis',
   datasources: [],
   endpoints: [],
+  scripts: [],
   logs: [],
   config: {
     openapiPath: '/openapi',
     drivers: { mysql: false, oracle: false },
     adminTokenRequired: false,
     queryTimeoutMs: 30000,
+    scriptTimeoutMs: 30000,
+    scriptHttpAllowlist: [],
+    plugins: [],
+    pluginErrors: [],
     version: '1.0.0'
   },
   loading: true,
@@ -27,7 +32,10 @@ export function createBlankEditor() {
     method: 'GET',
     path: '/example',
     datasourceId: firstDatasource?.id || '',
+    engine: 'sql',
     sql: 'SELECT * FROM <table>\nWHERE id = #{id}',
+    scriptCode: "const row = await db.queryOne('SELECT 1 AS ok');\nreturn { params, row };",
+    allowHttp: false,
     description: '',
     group: '',
     enabled: true,
@@ -40,6 +48,7 @@ export function createBlankEditor() {
     testPage: 1,
     testPageSize: 20,
     testResponse: null,
+    scriptLogs: [],
     renderResponse: null
   };
 }
@@ -47,6 +56,9 @@ export function createBlankEditor() {
 export function cloneEditor(endpoint) {
   return {
     ...structuredClone(endpoint),
+    engine: endpoint.engine || 'sql',
+    scriptCode: endpoint.scriptCode || '',
+    allowHttp: Boolean(endpoint.allowHttp),
     params: (endpoint.params || []).map((param) => ({
       ...param,
       defaultValue: param.defaultValue ?? '',

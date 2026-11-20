@@ -10,6 +10,9 @@
 - 数据源管理：MySQL / Oracle 连接配置、连接测试、表结构浏览。
 - 一键 CRUD：列表、详情、新增、更新、删除。
 - SQL 模板：安全绑定参数、条件标签、循环标签和显式原样拼接。
+- JavaScript 业务脚本：在 Worker 中执行多查询、事务、共享脚本、HTTP 调用和服务端插件。
+- 共享脚本库：公共业务函数可在多个脚本接口中以 `ctx.libs.名称.函数()` 复用。
+- 版本历史：接口与共享脚本每次保存生成快照，可在管理台查看并回滚。
 - SELECT 分页：自动生成总数与分页查询。
 - 查询超时：全局默认值与接口级覆盖，超时返回 HTTP 504。
 - 数据源只读模式：写语句在执行前被拒绝，自动 CRUD 只生成查询接口。
@@ -78,6 +81,11 @@ npm run dev
 | `OPENAPI_TOKEN` | 空 | 生成接口的访问令牌。非空时请求需携带 `x-api-token` 或 Bearer token。 |
 | `OPENAPI_PATH` | `/openapi` | 生成接口的基础路径。 |
 | `QUERY_TIMEOUT_MS` | `30000` | 单个生成接口的数据库查询总超时，单位毫秒；设为 `0` 可关闭全局超时。 |
+| `SCRIPT_TIMEOUT_MS` | `30000` | 脚本接口默认执行超时；接口级 `timeoutMs` 可覆盖。 |
+| `SCRIPT_HTTP_ALLOWLIST` | 空 | 脚本 `http.fetch` 允许访问的域名列表，支持 `api.example.com` 和 `*.example.com`；为空时全部拒绝。 |
+| `SCRIPT_HTTP_MAX_RESPONSE_BYTES` | `1048576` | 脚本外部 HTTP 响应体大小上限。 |
+| `SCRIPT_WORKER_MEMORY_MB` | `128` | 单个脚本 Worker 的内存上限。 |
+| `PLUGINS_DIR` | `plugins` | 服务端插件目录，启动时加载其中的 `.js` / `.mjs` 文件。 |
 | `CORS_ORIGIN` | `*` | 生成接口的 CORS 允许来源，可填逗号分隔列表；管理 API 不走该配置。 |
 | `ORACLE_THICK_MODE` | `false` | 设为 `true` 启用 `node-oracledb` Thick 模式，使用系统动态库路径中的 Oracle Client。 |
 | `ORACLE_CLIENT_LIB_DIR` | 空 | Oracle Client 库目录。配置该目录会自动启用 Thick 模式，适合 Oracle 11g；Linux 上还需通过 `ldconfig` 或 `LD_LIBRARY_PATH` 提供系统动态库路径。 |
@@ -133,7 +141,7 @@ Oracle `CLOB` / `NCLOB` 字段和 `GETCLOBVAL()` 返回值会由驱动读取完�
 
 Oracle 11g 没有 Identity Column 元数据。由序列和触发器生成主键的表不会自动识别为自增列，自动生成的 POST 接口需要显式提交主键，或改用自定义 SQL 接口。
 
-Oracle 写操作执行时启用 `autoCommit`，单条 `INSERT`、`UPDATE`、`DELETE` 成功后立即提交。当前平台没有跨多条 SQL 的事务编排；需要事务的复杂业务应使用存储过程或其他服务实现。
+普通 SQL 接口中的 Oracle 写操作启用 `autoCommit`，单条 `INSERT`、`UPDATE`、`DELETE` 成功后立即提交。需要跨多条 SQL 的事务编排时，请使用 JavaScript 脚本接口中的 `db.transaction()`。
 
 ### 只读数据源
 
@@ -256,6 +264,73 @@ MySQL 超时会销毁当前连接，避免仍在执行的 SQL 被放回连接池
 
 自动更新接口使用 `COALESCE` 保留旧值，因此无法通过自动生成的更新接口把字段显式置为 `NULL`。需要置空时请创建自定义 SQL 接口。
 
+## JavaScript 业务脚本
+
+接口编辑页可将「实现方式」切换为「JavaScript 业务脚本」。脚本代码是一段异步函数体，使用 `return` 返回可 JSON 序列化的数据。
+
+```javascript
+const user = await ctx.db.queryOne(
+  'SELECT id, name FROM users WHERE id = #{id}',
+  { id: ctx.params.id }
+);
+if (!user) throw new Error('用户不存在');
+return { ...user, source: 'script' };
+```
+
+可用上下文：
+
+| API | 说明 |
+| --- | --- |
+| `ctx.params` | 按接口参数声明解析、校验和类型转换后的参数。 |
+| `ctx.request` | 已移除鉴权、Cookie 等敏感请求头的 query/body/path/headers。 |
+| `db.query(sql, params)` / `db.queryOne` | 执行查询，SQL 使用 `#{name}` 安全绑定。 |
+| `db.execute(sql, params)` | 执行写入并返回 `affectedRows`、`insertId`。 |
+| `db.transaction(async (tx) => {})` | 开启事务；`tx.query`、`tx.queryOne`、`tx.execute` 共享同一连接，异常自动回滚。 |
+| `http.fetch(url, options)` | 外部 HTTP；接口需开启「允许外部 HTTP」，且目标域名必须命中 `SCRIPT_HTTP_ALLOWLIST`。 |
+| `ctx.libs` | 已启用的共享脚本对象，例如 `ctx.libs.helper.normalize(value)`。 |
+| `ctx.plugins` | 启动时从插件目录加载的服务端插件，例如 `ctx.plugins.pricing.calculate(input)`。 |
+
+执行安全：
+
+- 脚本在独立 Worker 中运行，受超时和内存上限约束。
+- 不向脚本暴露 `require`、`process`、`fs`、`child_process`。
+- Worker 崩溃或超时会被主进程终止，未提交事务会回滚。
+- 脚本代码存储于 SQLite 明文，不要写入密钥或密码；敏感配置应放在环境变量或数据库加密配置中。
+
+### 共享脚本
+
+「共享脚本」必须 `return` 一个对象。启用后会自动注入所有脚本接口：
+
+```javascript
+return {
+  normalize(value) {
+    return String(value || '').trim().toLowerCase();
+  }
+};
+```
+
+接口中调用：
+
+```javascript
+return { name: ctx.libs.helper.normalize(ctx.params.name) };
+```
+
+接口和共享脚本每次保存都会生成版本快照，可在「历史版本」中恢复。
+
+### 服务端插件
+
+插件由开发人员放入 `PLUGINS_DIR` 指向的目录，启动时加载，不提供管理台上传接口。插件文件示例：
+
+```javascript
+export const actions = {
+  async calculate(input, context) {
+    return { total: input.amount * 2, endpoint: context.endpoint.name };
+  }
+};
+```
+
+脚本通过 `ctx.plugins.pricing.calculate(input)` 调用。插件函数第二个参数包含 `params`、`request`、`endpoint`、`db`、`http` 和 `logger`。插件代码属于可信服务端代码，可使用完整 Node.js 能力，因此只能由负责部署的开发人员维护。
+
 ## HTTP 接口
 
 ### 管理地址
@@ -331,12 +406,15 @@ server/
   runtime.js             /openapi/* 运行时分发
   store.js               SQLite 状态库、内存索引和旧 JSON 迁移
   openapi.js             OpenAPI 文档生成
-  services/              数据源、接口定义、查询、CRUD 业务逻辑
-  sql/                   模板解析、表达式求值、标识符处理
+  plugins.js             服务端插件加载、注册和调用
+  script/                脚本服务调度、Worker 沙箱和数据库 RPC
+  services/              数据源、接口定义、共享脚本、查询、CRUD 业务逻辑
+  sql/                   模板解析、表达式求值、标识符处理、脚本 SQL 绑定
 public/
   index.html             管理台入口
   js/                    原生 ESM 前端模块
   styles.css             管理台样式
+plugins/                 可信服务端插件目录，默认从 PLUGINS_DIR 加载
 tests/                   Node 内置测试
 data/                    SQLite 状态库、旧 JSON、WAL 文件和密钥文件，默认不提交
 ```
@@ -348,7 +426,7 @@ npm test
 npm run check
 ```
 
-当前自动化测试覆盖模板渲染、表达式求值、CRUD 生成、路径匹配、参数转换、密码加解密、SQLite 重启持久化与统计批量刷新、旧 JSON 迁移及失败回滚、Oracle 11g 分页与元数据兼容、Oracle Thick 模式初始化、Oracle DML 自动提交、数据源只读持久化与 403 拦截、查询超时与连接中断路径，以及应用处理器级的管理鉴权、静态页面、SQL 预览、超时响应和 OpenAPI 文档生成。
+当前自动化测试覆盖模板渲染、表达式求值、CRUD 生成、路径匹配、参数转换、密码加解密、SQLite 重启持久化与统计批量刷新、旧 JSON 迁移及失败回滚、schema v2 → v3 迁移、脚本 Worker 参数与共享脚本注入、脚本超时、事务提交与回滚、外部 HTTP 开关与白名单、插件加载、接口与共享脚本版本快照和恢复、Oracle 11g 分页与元数据兼容、Oracle Thick 模式初始化、Oracle DML 自动提交、数据源只读持久化与 403 拦截、查询超时与连接中断路径，以及应用处理器级的管理鉴权、静态页面、SQL 预览、脚本试运行、超时响应和 OpenAPI 文档生成。
 
 真实 MySQL / Oracle 连接、数据库方言执行结果、浏览器视觉回归和真实端口启动不属于当前沙箱已验证范围，需要在有数据库和网络的环境中继续联调。
 

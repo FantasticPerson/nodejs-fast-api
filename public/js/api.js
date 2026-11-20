@@ -87,6 +87,23 @@ export const api = {
   createEndpoint: (input) => request('/endpoints', { method: 'POST', body: input }),
   updateEndpoint: (id, input) => request(`/endpoints/${encodeURIComponent(id)}`, { method: 'PUT', body: input }),
   deleteEndpoint: (id) => request(`/endpoints/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  listEndpointVersions: (id) => request(`/endpoints/${encodeURIComponent(id)}/versions`),
+  restoreEndpointVersion: (id, version) =>
+    request(`/endpoints/${encodeURIComponent(id)}/versions/${encodeURIComponent(version)}/restore`, {
+      method: 'POST',
+      body: {}
+    }),
+  listScripts: () => request('/scripts'),
+  createScript: (input) => request('/scripts', { method: 'POST', body: input }),
+  updateScript: (name, input) =>
+    request(`/scripts/${encodeURIComponent(name)}`, { method: 'PUT', body: input }),
+  deleteScript: (name) => request(`/scripts/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+  listScriptVersions: (name) => request(`/scripts/${encodeURIComponent(name)}/versions`),
+  restoreScriptVersion: (name, version) =>
+    request(`/scripts/${encodeURIComponent(name)}/versions/${encodeURIComponent(version)}/restore`, {
+      method: 'POST',
+      body: {}
+    }),
   renderSql: (input) => request('/console/render', { method: 'POST', body: input }),
   runSql: (input) => request('/console/run', { method: 'POST', body: input }),
   clearLogs: () => request('/logs', { method: 'DELETE' }),

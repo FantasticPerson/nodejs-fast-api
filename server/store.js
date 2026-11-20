@@ -7,7 +7,7 @@ import {
   normalizeEndpointPath
 } from './path.js';
 
-const SCHEMA_VERSION = '2';
+const SCHEMA_VERSION = '3';
 
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS meta (
@@ -41,6 +41,9 @@ CREATE TABLE IF NOT EXISTS endpoints (
   path_signature TEXT NOT NULL,
   datasource_id TEXT NOT NULL REFERENCES datasources(id) ON DELETE RESTRICT,
   sql TEXT NOT NULL,
+  engine TEXT NOT NULL DEFAULT 'sql',
+  script_code TEXT NOT NULL DEFAULT '',
+  allow_http INTEGER NOT NULL DEFAULT 0 CHECK (allow_http IN (0, 1)),
   description TEXT NOT NULL DEFAULT '',
   group_name TEXT NOT NULL DEFAULT '',
   enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
@@ -52,6 +55,33 @@ CREATE TABLE IF NOT EXISTS endpoints (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   UNIQUE (method, path_signature)
+);
+
+CREATE TABLE IF NOT EXISTS endpoint_versions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  endpoint_id TEXT NOT NULL REFERENCES endpoints(id) ON DELETE CASCADE,
+  version INTEGER NOT NULL,
+  definition_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE (endpoint_id, version)
+);
+
+CREATE TABLE IF NOT EXISTS script_libraries (
+  name TEXT PRIMARY KEY COLLATE NOCASE,
+  description TEXT NOT NULL DEFAULT '',
+  code TEXT NOT NULL DEFAULT '',
+  enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS script_library_versions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL REFERENCES script_libraries(name) ON DELETE CASCADE,
+  version INTEGER NOT NULL,
+  definition_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE (name, version)
 );
 
 CREATE TABLE IF NOT EXISTS endpoint_params (
@@ -74,6 +104,8 @@ CREATE TABLE IF NOT EXISTS endpoint_stats (
 );
 
 CREATE INDEX IF NOT EXISTS idx_endpoints_datasource ON endpoints(datasource_id);
+CREATE INDEX IF NOT EXISTS idx_endpoint_versions_endpoint ON endpoint_versions(endpoint_id, version);
+CREATE INDEX IF NOT EXISTS idx_script_library_versions_name ON script_library_versions(name, version);
 `;
 
 const DATASOURCE_COLUMNS = `
@@ -83,7 +115,7 @@ const DATASOURCE_COLUMNS = `
 `;
 
 const ENDPOINT_COLUMNS = `
-  id, name, method, path, path_signature, datasource_id, sql,
+  id, name, method, path, path_signature, datasource_id, sql, engine, script_code, allow_http,
   description, group_name, enabled, allow_raw_sql, timeout_ms,
   pagination_enabled, pagination_max_page_size, response_mode,
   created_at, updated_at
@@ -104,12 +136,13 @@ WHERE id = ?
 
 const INSERT_ENDPOINT_SQL = `
 INSERT INTO endpoints (${ENDPOINT_COLUMNS})
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `;
 
 const UPDATE_ENDPOINT_SQL = `
 UPDATE endpoints SET
   name = ?, method = ?, path = ?, path_signature = ?, datasource_id = ?, sql = ?,
+  engine = ?, script_code = ?, allow_http = ?,
   description = ?, group_name = ?, enabled = ?, allow_raw_sql = ?, timeout_ms = ?,
   pagination_enabled = ?, pagination_max_page_size = ?, response_mode = ?,
   created_at = ?, updated_at = ?
@@ -138,6 +171,8 @@ export class SqliteStore {
     this.endpoints = [];
     this.endpointsById = new Map();
     this.endpointCountsByDatasource = new Map();
+    this.scriptLibraries = [];
+    this.scriptLibrariesByName = new Map();
     this.runtimeEndpoints = [];
     this.dirtyStats = new Set();
     this.statements = null;
@@ -154,6 +189,7 @@ export class SqliteStore {
         PRAGMA busy_timeout = 5000;
       `);
       this.db.exec(SCHEMA_SQL);
+      this.ensureSchemaColumns();
       await this.securePermissions();
       this.prepareStatements();
       await this.initializeMetadata();
@@ -188,6 +224,42 @@ export class SqliteStore {
 
   findEndpoint(id) {
     return this.endpointsById.get(id) || null;
+  }
+
+  listEndpointVersions(id) {
+    return this.db
+      .prepare('SELECT * FROM endpoint_versions WHERE endpoint_id = ? ORDER BY version DESC')
+      .all(id)
+      .map(endpointVersionFromRow);
+  }
+
+  findEndpointVersion(id, version) {
+    const row = this.db
+      .prepare('SELECT * FROM endpoint_versions WHERE endpoint_id = ? AND version = ?')
+      .get(id, Number(version));
+    return row ? endpointVersionFromRow(row) : null;
+  }
+
+  listScriptLibraries() {
+    return this.scriptLibraries;
+  }
+
+  findScriptLibrary(name) {
+    return this.scriptLibrariesByName.get(String(name).toLowerCase()) || null;
+  }
+
+  listScriptLibraryVersions(name) {
+    return this.db
+      .prepare('SELECT * FROM script_library_versions WHERE name = ? ORDER BY version DESC')
+      .all(name)
+      .map(scriptLibraryVersionFromRow);
+  }
+
+  findScriptLibraryVersion(name, version) {
+    const row = this.db
+      .prepare('SELECT * FROM script_library_versions WHERE name = ? AND version = ?')
+      .get(name, Number(version));
+    return row ? scriptLibraryVersionFromRow(row) : null;
   }
 
   getRuntimeEndpoints() {
@@ -239,6 +311,41 @@ export class SqliteStore {
     return records;
   }
 
+  insertScriptLibrary(input) {
+    const record = canonicalScriptLibrary(input);
+    this.transaction(() => {
+      this.statements.insertScriptLibrary.run(...scriptLibraryParams(record));
+      this.recordScriptLibraryVersion(record);
+    });
+    this.replaceScriptLibrary(record);
+    return record;
+  }
+
+  updateScriptLibrary(name, input) {
+    const existing = this.findScriptLibrary(name);
+    if (!existing) throw new Error(`共享脚本不存在：${name}`);
+    const record = canonicalScriptLibrary({
+      ...existing,
+      ...input,
+      name: existing.name,
+      createdAt: existing.createdAt
+    });
+    this.transaction(() => {
+      this.statements.updateScriptLibrary.run(...scriptLibraryUpdateParams(record));
+      this.recordScriptLibraryVersion(record);
+    });
+    this.replaceScriptLibrary(record);
+    return record;
+  }
+
+  deleteScriptLibrary(name) {
+    this.transaction(() => {
+      this.statements.deleteScriptLibrary.run(name);
+    });
+    this.scriptLibraries = this.scriptLibraries.filter((item) => item.name !== name);
+    this.scriptLibrariesByName.delete(name.toLowerCase());
+  }
+
   updateEndpoint(id, input) {
     const existing = this.findEndpoint(id);
     if (!existing) throw new Error(`接口不存在：${id}`);
@@ -253,6 +360,7 @@ export class SqliteStore {
       this.statements.updateEndpoint.run(...endpointUpdateParams(record));
       this.statements.deleteParams.run(id);
       this.insertParams(record);
+      this.recordEndpointVersion(record);
     });
     this.replaceEndpoint(record);
     return record;
@@ -310,28 +418,66 @@ export class SqliteStore {
   }
 
   async initializeMetadata() {
-    if (this.getMeta('initialized') === '1') return;
-    const counts = this.db.prepare(`
-      SELECT
-        (SELECT COUNT(*) FROM datasources) AS datasource_count,
-        (SELECT COUNT(*) FROM endpoints) AS endpoint_count
-    `).get();
-    if (Number(counts.datasource_count || 0) || Number(counts.endpoint_count || 0)) {
-      throw new Error('SQLite 状态库包含数据但缺少初始化标记，请检查数据库文件');
-    }
-
-    const legacy = await this.readLegacyState();
-    this.transaction(() => {
-      if (legacy) {
-        for (const datasource of legacy.datasources) this.insertDatasourceRow(datasource);
-        for (const endpoint of legacy.endpoints) this.insertEndpointRow(endpoint);
-        this.setMeta('legacy_imported_at', new Date().toISOString());
-        this.setMeta('legacy_source', this.legacyStateFile);
+    if (this.getMeta('initialized') !== '1') {
+      const counts = this.db.prepare(`
+        SELECT
+          (SELECT COUNT(*) FROM datasources) AS datasource_count,
+          (SELECT COUNT(*) FROM endpoints) AS endpoint_count
+      `).get();
+      if (Number(counts.datasource_count || 0) || Number(counts.endpoint_count || 0)) {
+        throw new Error('SQLite 状态库包含数据但缺少初始化标记，请检查数据库文件');
       }
+
+      const legacy = await this.readLegacyState();
+      this.transaction(() => {
+        if (legacy) {
+          for (const datasource of legacy.datasources) this.insertDatasourceRow(datasource);
+          for (const endpoint of legacy.endpoints) this.insertEndpointRow(endpoint);
+          this.setMeta('legacy_imported_at', new Date().toISOString());
+          this.setMeta('legacy_source', this.legacyStateFile);
+        }
+        this.setMeta('initialized', '1');
+        this.setMeta('initialized_at', new Date().toISOString());
+      });
+    }
+    this.transaction(() => {
+      this.backfillEndpointVersions();
       this.setMeta('schema_version', SCHEMA_VERSION);
-      this.setMeta('initialized', '1');
-      this.setMeta('initialized_at', new Date().toISOString());
     });
+  }
+
+  backfillEndpointVersions() {
+    const endpointIds = this.db.prepare(`
+      SELECT e.id
+      FROM endpoints e
+      WHERE NOT EXISTS (
+        SELECT 1 FROM endpoint_versions v WHERE v.endpoint_id = e.id
+      )
+    `).all();
+    for (const { id } of endpointIds) {
+      const row = this.db.prepare('SELECT * FROM endpoints WHERE id = ?').get(id);
+      const params = this.db
+        .prepare('SELECT * FROM endpoint_params WHERE endpoint_id = ? ORDER BY position')
+        .all(id)
+        .map((param) => canonicalParam(paramFromRow(param)));
+      this.recordEndpointVersion(endpointFromRow(row, params, null));
+    }
+  }
+
+  ensureSchemaColumns() {
+    const columns = new Set(
+      this.db.prepare('PRAGMA table_info(endpoints)').all().map((row) => row.name)
+    );
+    const additions = [
+      ['engine', "TEXT NOT NULL DEFAULT 'sql'"],
+      ['script_code', "TEXT NOT NULL DEFAULT ''"],
+      ['allow_http', 'INTEGER NOT NULL DEFAULT 0']
+    ];
+    for (const [name, definition] of additions) {
+      if (!columns.has(name)) {
+        this.db.exec(`ALTER TABLE endpoints ADD COLUMN ${name} ${definition}`);
+      }
+    }
   }
 
   async readLegacyState() {
@@ -380,6 +526,13 @@ export class SqliteStore {
       endpointFromRow(row, paramsByEndpoint.get(row.id) || [], statsById.get(row.id))
     );
     this.endpointsById = new Map(this.endpoints.map((endpoint) => [endpoint.id, endpoint]));
+    const libraryRows = this.db
+      .prepare('SELECT * FROM script_libraries ORDER BY name')
+      .all();
+    this.scriptLibraries = libraryRows.map(scriptLibraryFromRow);
+    this.scriptLibrariesByName = new Map(
+      this.scriptLibraries.map((library) => [library.name.toLowerCase(), library])
+    );
     this.dirtyStats.clear();
     this.rebuildRuntimeIndex();
   }
@@ -398,7 +551,25 @@ export class SqliteStore {
           endpoint_id, position, name, location, type, required, default_value, description
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       `),
-      upsertStats: this.db.prepare(UPSERT_STATS_SQL)
+      upsertStats: this.db.prepare(UPSERT_STATS_SQL),
+      insertEndpointVersion: this.db.prepare(`
+        INSERT INTO endpoint_versions (endpoint_id, version, definition_json, created_at)
+        VALUES (?, ?, ?, ?)
+      `),
+      insertScriptLibrary: this.db.prepare(`
+        INSERT INTO script_libraries (name, description, code, enabled, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `),
+      updateScriptLibrary: this.db.prepare(`
+        UPDATE script_libraries SET description = ?, code = ?, enabled = ?,
+          created_at = ?, updated_at = ?
+        WHERE name = ?
+      `),
+      deleteScriptLibrary: this.db.prepare('DELETE FROM script_libraries WHERE name = ?'),
+      insertScriptLibraryVersion: this.db.prepare(`
+        INSERT INTO script_library_versions (name, version, definition_json, created_at)
+        VALUES (?, ?, ?, ?)
+      `)
     };
   }
 
@@ -413,6 +584,31 @@ export class SqliteStore {
       endpoint.id,
       Number(endpoint.callCount || 0),
       endpoint.lastCalledAt || null
+    );
+    this.recordEndpointVersion(endpoint);
+  }
+
+  recordEndpointVersion(endpoint) {
+    const next = this.db
+      .prepare('SELECT COALESCE(MAX(version), 0) + 1 AS version FROM endpoint_versions WHERE endpoint_id = ?')
+      .get(endpoint.id).version;
+    this.statements.insertEndpointVersion.run(
+      endpoint.id,
+      next,
+      JSON.stringify(endpointSnapshot(endpoint)),
+      new Date().toISOString()
+    );
+  }
+
+  recordScriptLibraryVersion(library) {
+    const next = this.db
+      .prepare('SELECT COALESCE(MAX(version), 0) + 1 AS version FROM script_library_versions WHERE name = ?')
+      .get(library.name).version;
+    this.statements.insertScriptLibraryVersion.run(
+      library.name,
+      next,
+      JSON.stringify(library),
+      new Date().toISOString()
     );
   }
 
@@ -436,6 +632,13 @@ export class SqliteStore {
     if (index >= 0) this.datasources[index] = datasource;
     else this.datasources.push(datasource);
     this.datasourcesById.set(datasource.id, datasource);
+  }
+
+  replaceScriptLibrary(library) {
+    const index = this.scriptLibraries.findIndex((item) => item.name === library.name);
+    if (index >= 0) this.scriptLibraries[index] = library;
+    else this.scriptLibraries.push(library);
+    this.scriptLibrariesByName.set(library.name.toLowerCase(), library);
   }
 
   replaceEndpoint(endpoint) {
@@ -528,7 +731,11 @@ function canonicalEndpoint(input = {}) {
   const method = requiredText(input.method || 'GET', 'HTTP 方法').toUpperCase();
   const endpointPath = normalizeEndpointPath(input.path);
   const datasourceId = requiredText(input.datasourceId, '接口数据源');
-  const sql = requiredText(input.sql, '接口 SQL');
+  const engine = String(input.engine || 'sql').toLowerCase();
+  if (!['sql', 'script'].includes(engine)) throw new Error(`接口引擎无效：${engine}`);
+  const sql = engine === 'sql' ? requiredText(input.sql, '接口 SQL') : String(input.sql || '');
+  const scriptCode = String(input.scriptCode ?? '');
+  if (engine === 'script' && !scriptCode.trim()) throw new Error('脚本代码不能为空');
   const params = (Array.isArray(input.params) ? input.params : []).map((param) =>
     canonicalParam(param)
   );
@@ -540,6 +747,9 @@ function canonicalEndpoint(input = {}) {
     path: endpointPath,
     datasourceId,
     sql,
+    engine,
+    scriptCode,
+    allowHttp: Boolean(input.allowHttp),
     description: String(input.description || '').trim(),
     group: String(input.group || '').trim(),
     enabled: input.enabled !== false,
@@ -576,6 +786,24 @@ function canonicalParam(input = {}) {
         ? null
         : String(input.defaultValue),
     description: String(input.description || '').trim()
+  };
+}
+
+function canonicalScriptLibrary(input = {}) {
+  const now = new Date().toISOString();
+  const name = requiredText(input.name, '共享脚本名称');
+  if (!/^[A-Za-z_][A-Za-z0-9_]{0,59}$/.test(name)) {
+    throw new Error('共享脚本名称必须以字母或下划线开头，且不超过 60 个字符');
+  }
+  const code = String(input.code ?? '');
+  if (!code.trim()) throw new Error('共享脚本代码不能为空');
+  return {
+    name,
+    description: String(input.description || '').trim(),
+    code,
+    enabled: input.enabled !== false,
+    createdAt: input.createdAt || now,
+    updatedAt: input.updatedAt || now
   };
 }
 
@@ -676,6 +904,9 @@ function endpointParams(endpoint) {
     endpointPathSignature(endpoint.path),
     endpoint.datasourceId,
     endpoint.sql,
+    endpoint.engine,
+    endpoint.scriptCode,
+    endpoint.allowHttp ? 1 : 0,
     endpoint.description,
     endpoint.group,
     endpoint.enabled ? 1 : 0,
@@ -697,6 +928,9 @@ function endpointUpdateParams(endpoint) {
     endpointPathSignature(endpoint.path),
     endpoint.datasourceId,
     endpoint.sql,
+    endpoint.engine,
+    endpoint.scriptCode,
+    endpoint.allowHttp ? 1 : 0,
     endpoint.description,
     endpoint.group,
     endpoint.enabled ? 1 : 0,
@@ -739,6 +973,9 @@ function endpointFromRow(row, params, stats) {
     path: row.path,
     datasourceId: row.datasource_id,
     sql: row.sql,
+    engine: row.engine || 'sql',
+    scriptCode: row.script_code || '',
+    allowHttp: Boolean(row.allow_http),
     description: row.description || '',
     group: row.group_name || '',
     enabled: Boolean(row.enabled),
@@ -754,6 +991,64 @@ function endpointFromRow(row, params, stats) {
     updatedAt: row.updated_at,
     callCount: Number(stats?.call_count || 0),
     lastCalledAt: stats?.last_called_at || null
+  };
+}
+
+function scriptLibraryFromRow(row) {
+  return {
+    name: row.name,
+    description: row.description || '',
+    code: row.code || '',
+    enabled: Boolean(row.enabled),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function scriptLibraryParams(library) {
+  return [
+    library.name,
+    library.description,
+    library.code,
+    library.enabled ? 1 : 0,
+    library.createdAt,
+    library.updatedAt
+  ];
+}
+
+function scriptLibraryUpdateParams(library) {
+  return [
+    library.description,
+    library.code,
+    library.enabled ? 1 : 0,
+    library.createdAt,
+    library.updatedAt,
+    library.name
+  ];
+}
+
+function endpointSnapshot(endpoint) {
+  const { callCount, lastCalledAt, ...snapshot } = endpoint;
+  return snapshot;
+}
+
+function endpointVersionFromRow(row) {
+  return {
+    id: Number(row.id),
+    endpointId: row.endpoint_id,
+    version: Number(row.version),
+    definition: JSON.parse(row.definition_json),
+    createdAt: row.created_at
+  };
+}
+
+function scriptLibraryVersionFromRow(row) {
+  return {
+    id: Number(row.id),
+    name: row.name,
+    version: Number(row.version),
+    definition: JSON.parse(row.definition_json),
+    createdAt: row.created_at
   };
 }
 

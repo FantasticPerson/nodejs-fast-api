@@ -66,6 +66,7 @@ function renderSidebar() {
   const activeView = state.view === 'editor' ? 'apis' : state.view;
   const nav = [
     ['apis', '接口', 'code'],
+    ['scripts', '共享脚本', 'spark'],
     ['datasources', '数据源', 'database'],
     ['logs', '调用日志', 'activity'],
     ['docs', '接口文档', 'book']
@@ -118,6 +119,7 @@ function renderCurrentView() {
   if (state.error) return renderFatalError();
   if (state.view === 'editor') return renderEditor();
   if (state.view === 'datasources') return renderDatasources();
+  if (state.view === 'scripts') return renderScripts();
   if (state.view === 'logs') return renderLogs();
   if (state.view === 'docs') return renderDocs();
   return renderApis();
@@ -260,6 +262,7 @@ function renderEditor() {
       <code>${escapeHtml(fullUrl)}</code>
     </div>
     <div class="head-actions">
+      ${editor.id ? `<button class="secondary-button" data-action="editor-versions">历史版本</button>` : ''}
       ${editor.id ? `<button class="danger-ghost-button" data-action="editor-delete">${ICONS.trash}<span>删除</span></button>` : ''}
       <button class="primary-button" data-action="editor-save">${ICONS.arrow}<span>${editor.id ? '保存并启用' : '创建接口'}</span></button>
     </div>
@@ -268,7 +271,7 @@ function renderEditor() {
   <div class="editor-shell">
     <div class="editor-main">
       ${renderRouteCard(editor)}
-      ${renderSqlCard(editor)}
+      ${editor.engine === 'script' ? renderScriptCard(editor) : renderSqlCard(editor)}
       ${renderTestCard(editor)}
     </div>
     <aside class="editor-side">
@@ -289,6 +292,12 @@ function renderRouteCard(editor) {
           ${['GET', 'POST', 'PUT', 'PATCH', 'DELETE']
             .map((method) => `<option value="${method}" ${editor.method === method ? 'selected' : ''}>${method}</option>`)
             .join('')}
+        </select>
+      </label>
+      <label class="field"><span>实现方式</span>
+        <select data-field="engine" data-rerender="1">
+          <option value="sql" ${editor.engine !== 'script' ? 'selected' : ''}>SQL 接口</option>
+          <option value="script" ${editor.engine === 'script' ? 'selected' : ''}>JavaScript 业务脚本</option>
         </select>
       </label>
       <label class="field"><span>接口路径</span><input data-field="path" value="${escapeHtml(editor.path)}" placeholder="/users/:id"></label>
@@ -330,12 +339,38 @@ function renderSqlCard(editor) {
   </section>`;
 }
 
+function renderScriptCard(editor) {
+  const lineCount = String(editor.scriptCode || '').split('\n').length;
+  const gutter = Array.from({ length: Math.max(1, lineCount) }, (_, index) => index + 1).join('\n');
+  return `<section class="editor-card sql-card">
+    <div class="card-head">
+      <div><span class="eyebrow">BUSINESS SCRIPT</span><h2>JavaScript 业务脚本</h2></div>
+      <div class="snippet-bar">
+        <button data-action="editor-insert" data-snippet="const row = await db.queryOne('SELECT ...', { id: ctx.params.id });\n">db.queryOne</button>
+        <button data-action="editor-insert" data-snippet="await db.transaction(async (tx) => {\n  await tx.execute('UPDATE ...', { id: ctx.params.id });\n});\n">事务</button>
+        <button data-action="editor-insert" data-snippet="const response = await http.fetch('https://api.example.com/path');\n">http.fetch</button>
+      </div>
+    </div>
+    <div class="code-shell">
+      <pre class="code-gutter" id="script-gutter">${gutter}</pre>
+      <textarea id="script-input" class="code-input" data-field="scriptCode" spellcheck="false" autocomplete="off">${escapeHtml(editor.scriptCode)}</textarea>
+    </div>
+    <div class="code-help">
+      <span><b>ctx.params</b> 请求参数</span>
+      <span><b>db.query / queryOne / execute</b> 数据库调用</span>
+      <span><b>db.transaction</b> 多语句事务</span>
+      <span><b>return</b> 返回 JSON 数据</span>
+    </div>
+    <div class="notice notice-info"><div><strong>执行环境</strong><p>脚本在独立 Worker 中运行，只暴露受控的数据库、HTTP 和插件接口，不提供 require、process 和文件系统。</p></div></div>
+  </section>`;
+}
+
 function renderParamsCard(editor) {
   return `<section class="editor-card">
     <div class="card-head compact">
       <div><span class="eyebrow">PARAMETERS</span><h2>请求参数</h2></div>
       <div class="mini-actions">
-        <button class="tiny-button" data-action="editor-extract-params">从 SQL 提取</button>
+        ${editor.engine === 'script' ? '' : '<button class="tiny-button" data-action="editor-extract-params">从 SQL 提取</button>'}
         <button class="tiny-button" data-action="editor-add-param">${ICONS.plus}</button>
       </div>
     </div>
@@ -366,10 +401,14 @@ function renderParamRow(param, index) {
 }
 
 function renderOptionsCard(editor) {
+  const isScript = editor.engine === 'script';
   return `<section class="editor-card">
     <div class="card-head compact"><div><span class="eyebrow">BEHAVIOUR</span><h2>接口选项</h2></div></div>
     <div class="toggle-list">
-      <div class="toggle-row">
+      ${isScript ? `<div class="toggle-row">
+        <div><strong>允许外部 HTTP</strong><small>仍需命中服务端 SCRIPT_HTTP_ALLOWLIST 白名单</small></div>
+        <label class="switch"><input type="checkbox" data-field="allowHttp" data-rerender="1" ${editor.allowHttp ? 'checked' : ''}><span></span></label>
+      </div>` : `<div class="toggle-row">
         <div><strong>自动分页</strong><small>SELECT 语句会增加 count 查询与分页片段</small></div>
         <label class="switch"><input type="checkbox" data-field="pageEnabled" data-rerender="1" ${editor.pagination?.enabled ? 'checked' : ''}><span></span></label>
       </div>
@@ -377,7 +416,7 @@ function renderOptionsCard(editor) {
       <div class="toggle-row">
         <div><strong>允许原样 SQL</strong><small class="danger-text">开启后 ${'${'}name} 会直接拼接，存在注入风险</small></div>
         <label class="switch"><input type="checkbox" data-field="allowRawSql" data-rerender="1" ${editor.allowRawSql ? 'checked' : ''}><span></span></label>
-      </div>
+      </div>`}
       <label class="field compact-field"><span>响应模式</span>
         <select data-field="responseMode" data-rerender="1">
           <option value="wrap" ${editor.responseMode !== 'raw' ? 'selected' : ''}>统一包装 { code, message, data }</option>
@@ -385,7 +424,7 @@ function renderOptionsCard(editor) {
         </select>
       </label>
       <label class="field compact-field"><span>接口超时（毫秒）</span>
-        <input type="number" min="0" max="600000" data-field="timeoutMs" value="${escapeHtml(editor.timeoutMs || 0)}" placeholder="0 = 使用全局 ${escapeHtml(state.config.queryTimeoutMs ?? 30000)}">
+        <input type="number" min="0" max="600000" data-field="timeoutMs" value="${escapeHtml(editor.timeoutMs || 0)}" placeholder="0 = 使用全局 ${escapeHtml((isScript ? state.config.scriptTimeoutMs : state.config.queryTimeoutMs) ?? 30000)}">
       </label>
       <div class="toggle-row">
         <div><strong>启用状态</strong><small>关闭后运行时会返回 404</small></div>
@@ -396,12 +435,13 @@ function renderOptionsCard(editor) {
 }
 
 function renderTestCard(editor) {
+  const isScript = editor.engine === 'script';
   return `<section class="editor-card">
     <div class="card-head">
       <div><span class="eyebrow">PLAYGROUND</span><h2>在线调试</h2></div>
       <div class="mini-actions">
-        <button class="tiny-button" data-action="editor-render">预览 SQL</button>
-        <button class="accent-button" data-action="editor-run">运行接口</button>
+        ${isScript ? '' : '<button class="tiny-button" data-action="editor-render">预览 SQL</button>'}
+        <button class="accent-button" data-action="editor-run">${isScript ? '运行脚本' : '运行接口'}</button>
       </div>
     </div>
     <div class="test-grid">
@@ -419,7 +459,8 @@ function renderTestCard(editor) {
     </div>
     ${editor.renderResponse ? `<div class="output-block"><div class="output-head"><span>渲染后的 SQL</span><button data-action="editor-copy-render">${ICONS.copy}</button></div><pre>${escapeHtml(JSON.stringify(editor.renderResponse, null, 2))}</pre></div>` : ''}
     ${editor.testResponse ? `<div class="output-block"><div class="output-head"><span>接口返回</span><button data-action="editor-copy-result">${ICONS.copy}</button></div><pre>${escapeHtml(JSON.stringify(editor.testResponse, null, 2))}</pre></div>` : ''}
-    ${!editor.renderResponse && !editor.testResponse ? '<div class="output-empty">点击“预览 SQL”查看绑定结果，点击“运行接口”执行真实查询。</div>' : ''}
+    ${editor.scriptLogs?.length ? `<div class="output-block"><div class="output-head"><span>脚本日志</span></div><pre>${escapeHtml(JSON.stringify(editor.scriptLogs, null, 2))}</pre></div>` : ''}
+    ${!editor.renderResponse && !editor.testResponse ? `<div class="output-empty">${isScript ? '点击“运行脚本”执行当前代码并查看返回结果。' : '点击“预览 SQL”查看绑定结果，点击“运行接口”执行真实查询。'}</div>` : ''}
   </section>`;
 }
 
@@ -485,6 +526,42 @@ function renderEmptyDatasources() {
   </div>`;
 }
 
+function renderScripts() {
+  return `<div class="view-head">
+    <div>
+      <span class="eyebrow">SHARED SCRIPTS</span>
+      <h1>共享脚本库</h1>
+      <p>这里的脚本会在启用状态下注入所有脚本接口，通过 <code>ctx.libs.名称.函数()</code> 复用。</p>
+    </div>
+    <button class="primary-button" data-action="script-new">${ICONS.plus}<span>新建共享脚本</span></button>
+  </div>
+  ${state.config.pluginErrors?.length ? `<div class="notice notice-warn"><div><strong>插件加载异常</strong><p>${escapeHtml(state.config.pluginErrors.map((item) => `${item.file}: ${item.message}`).join('；'))}</p></div></div>` : ''}
+  ${state.scripts.length ? `<div class="endpoint-list">${state.scripts.map(renderScriptRow).join('')}</div>` : `<div class="empty-state">
+    <span class="eyebrow">REUSABLE LOGIC</span>
+    <h2>把重复逻辑抽成共享脚本</h2>
+    <p>共享脚本必须返回一个对象；对象里的函数可以在任意脚本接口中复用。</p>
+    <button class="primary-button" data-action="script-new">${ICONS.plus}<span>创建第一个共享脚本</span></button>
+  </div>`}`;
+}
+
+function renderScriptRow(library) {
+  return `<div class="endpoint-row">
+    <button class="endpoint-main" data-action="script-edit" data-name="${escapeHtml(library.name)}">
+      <span class="method-badge ${library.enabled ? 'get' : ''}">${library.enabled ? 'ON' : 'OFF'}</span>
+      <span class="endpoint-copy">
+        <span class="endpoint-name">${escapeHtml(library.name)}</span>
+        <code class="endpoint-path">${escapeHtml(library.description || '共享脚本')}</code>
+      </span>
+    </button>
+    <div class="endpoint-meta"><span class="meta-label">更新</span><span>${escapeHtml(timeAgo(library.updatedAt))}</span></div>
+    <div class="endpoint-actions">
+      <button class="tiny-button" data-action="script-versions" data-name="${escapeHtml(library.name)}">版本</button>
+      <button class="icon-button" data-action="script-edit" data-name="${escapeHtml(library.name)}" aria-label="编辑">${ICONS.edit}</button>
+      <button class="icon-button" data-action="script-delete" data-name="${escapeHtml(library.name)}" aria-label="删除">${ICONS.trash}</button>
+    </div>
+  </div>`;
+}
+
 function renderLogs() {
   return `<div class="view-head">
     <div><span class="eyebrow">REQUEST TRACE</span><h1>调用日志</h1><p>日志保存在内存中，最多 200 条；不会记录请求体和任何密钥。</p></div>
@@ -546,6 +623,8 @@ function renderModalBody(modal) {
   if (modal.type === 'tables') return renderTablesModal(modal);
   if (modal.type === 'generator') return renderGeneratorModal(modal);
   if (modal.type === 'token') return renderTokenModal(modal);
+  if (modal.type === 'script-library') return renderScriptLibraryModal(modal);
+  if (modal.type === 'versions') return renderVersionsModal(modal);
   if (modal.type === 'confirm') return renderConfirmModal(modal);
   return '';
 }
@@ -567,7 +646,40 @@ function renderModalFooter(modal) {
   if (modal.type === 'generator') {
     return `<div class="modal-foot"><div class="muted">生成后接口立即可用，路径冲突会中止整批创建。</div><div class="modal-foot-actions"><button class="ghost-button" data-action="modal-close">取消</button><button class="primary-button" data-action="crud-generate">生成接口</button></div></div>`;
   }
+  if (modal.type === 'script-library') {
+    return `<div class="modal-foot"><div class="muted">启用后会自动注入脚本接口。</div><div class="modal-foot-actions"><button class="ghost-button" data-action="modal-close">取消</button><button class="primary-button" data-action="script-save">保存共享脚本</button></div></div>`;
+  }
   return '';
+}
+
+function renderScriptLibraryModal(modal) {
+  const script = modal.data?.script || {};
+  const existing = Boolean(modal.data?.existing);
+  return `<div class="modal-intro">共享脚本代码必须 <code>return</code> 一个对象。例如返回 <code>{ normalize(row) { ... } }</code> 后，接口脚本可通过 <code>ctx.libs.${escapeHtml(script.name || '名称')}.normalize(row)</code> 调用。</div>
+  <form id="script-library-form" class="modal-form">
+    <div class="form-grid">
+      <label class="field"><span>名称</span><input name="name" value="${escapeHtml(script.name || '')}" ${existing ? 'readonly' : ''} placeholder="例如：customer_helpers"></label>
+      <label class="field"><span>启用</span><select name="enabled"><option value="true" ${script.enabled !== false ? 'selected' : ''}>启用</option><option value="false" ${script.enabled === false ? 'selected' : ''}>停用</option></select></label>
+      <label class="field field-span-2"><span>描述</span><input name="description" value="${escapeHtml(script.description || '')}" placeholder="说明共享脚本的用途"></label>
+      <label class="field field-span-2"><span>脚本代码</span><textarea name="code" rows="16" spellcheck="false" class="code-textarea">${escapeHtml(script.code || "return {\n  normalize(value) {\n    return String(value || '').trim();\n  }\n};")}</textarea></label>
+    </div>
+  </form>`;
+}
+
+function renderVersionsModal(modal) {
+  const versions = modal.data?.versions || [];
+  return `<div class="modal-intro">每次保存都会生成一个新版本。恢复历史版本会以该版本内容重新保存，并生成新的当前版本。</div>
+    ${versions.length ? `<div class="endpoint-list">${versions.map((item) => `<div class="endpoint-row">
+      <div class="endpoint-main"><span class="method-badge get">v${escapeHtml(item.version)}</span><span class="endpoint-copy"><span class="endpoint-name">${escapeHtml(formatDate(item.createdAt))}</span><code class="endpoint-path">${escapeHtml(versionSummary(item.definition))}</code></span></div>
+      <div class="endpoint-actions"><button class="tiny-button" data-action="version-restore" data-kind="${escapeHtml(modal.data.kind)}" data-target="${escapeHtml(modal.data.target)}" data-version="${escapeHtml(item.version)}">恢复此版本</button></div>
+    </div>`).join('')}</div>` : '<div class="output-empty">还没有历史版本。</div>'}`;
+}
+
+function versionSummary(definition = {}) {
+  if (definition.engine === 'script' || definition.code) {
+    return String(definition.name || definition.code || '脚本').slice(0, 80);
+  }
+  return String(definition.name || 'SQL 接口').slice(0, 80);
 }
 
 function renderDatasourceModal(modal) {

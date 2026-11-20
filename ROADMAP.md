@@ -29,6 +29,13 @@
 - 管理台编辑页支持配置接口超时，管理 API 保存并回显 `timeoutMs`。
 - Oracle 非查询语句启用 `autoCommit`，通过驱动选项测试确认 DML 执行后提交。
 - 数据源支持持久化只读设置；运行时对非查询 SQL 返回 HTTP 403 / `DATASOURCE_READ_ONLY`，只读数据源的 CRUD 生成仅保留查询接口。
+- 接口新增 `sql` / `script` 双引擎；脚本接口在独立 Worker 中执行，通过受控 `ctx` 提供参数、数据库、事务、外部 HTTP、共享脚本库和插件调用。
+- 脚本数据库操作由主进程 RPC 执行，支持 MySQL / Oracle 手动事务，提交失败和脚本异常自动回滚。
+- 共享脚本库支持管理台 CRUD、启停、描述、版本快照和历史恢复；接口与共享脚本每次保存都会追加版本，不覆盖旧版本。
+- 脚本接口支持执行超时、Worker 内存上限、返回结果大小上限、事务清理和 `SCRIPT_TIMEOUT` 错误。
+- 外部 HTTP 默认关闭，接口显式开启后还需命中 `SCRIPT_HTTP_ALLOWLIST`；默认响应体上限 1 MB。
+- 服务端插件从 `PLUGINS_DIR` 加载，只允许部署人员通过文件维护，不提供管理台上传入口。
+- SQLite schema 升级到 v3，新增接口引擎、脚本代码、HTTP 开关、接口版本表、共享脚本表和共享脚本版本表；v2 数据库自动补列并回填接口版本。
 - 修复只读 SQL 分类对外层括号、括号主查询、多个 CTE、CTE 列别名和带 `UNION` 的首个 CTE 分支的误判；写语句和写 CTE 仍会被拒绝。
 - 修复 ESM 加载 CommonJS `oracledb` 时未解包 `default`、导致 `initOracleClient` 不可用的问题。
 - 增加 Oracle 独立连接诊断脚本，输出 Thick 模式状态和真实账号认证结果。
@@ -55,6 +62,7 @@
 - Oracle 真实数据库中的分页和 `COALESCE` NULL 绑定行为。
 - 真实 MySQL / Oracle 11g 下的慢 SQL 超时中断、连接池恢复和 Oracle `breakExecution()` 行为。
 - Oracle 真实数据库中的 DML 自动提交、回滚行为和连接池恢复。
+- 真实 MySQL / Oracle 中的脚本 `db.transaction()` 提交、异常回滚和连接池恢复。
 
 ## 已实现，待 GitHub Actions 验证
 
@@ -70,8 +78,8 @@
 - 验证 Oracle 更新语句中的 `COALESCE` 与 NULL 绑定行为。
 - 验证 Oracle 元数据返回字段大小写和默认 schema / connect string 组合。
 - 验证驱动缺失、网络中断、认证失败和数据库错误不会泄露数据源密码。
-- 在真实端口启动服务，检查 `/magic/api/health`、管理页、静态资源和 OpenAPI 文档。
 - 在浏览器中完成管理台视觉与交互验收。
+- 在真实浏览器中验收脚本编辑器、共享脚本页面、版本历史弹窗和脚本试运行交互。
 - 在 GitHub Actions 手动运行离线 npm cache workflow，并确认 artifact 可下载。
 - 在内网 Ubuntu 20.04 x86_64 上使用下载的 cache 执行 `npm ci --offline`，验证 MySQL/Oracle 驱动可加载。
 - 使用内网目标 Oracle 账号在管理台完成连接测试、元数据读取和实际接口调用。
@@ -87,7 +95,6 @@
 ## 当前阻塞
 
 - 当前沙箱无法解析 npm registry：`npm view mysql2 version` 返回 `ENOTFOUND registry.npmmirror.com`；已提供 GitHub Actions 构建路径，待实际运行验证。
-- 当前沙箱禁止额外监听本地端口：在沙箱内执行 `node server/index.js` 返回 `listen EPERM`；已有服务实例可通过 Chrome 访问。
 - 真实 MySQL / Oracle 数据库环境仍未接入，数据库联调尚未完成。
 
 ## 已知限制
@@ -101,14 +108,21 @@
 - 没有多用户、角色权限、租户隔离、接口级限流和持久化审计。
 - 查询超时依赖客户端中断；Oracle 11g 上的服务端 SQL 是否立即结束仍需真实数据库验证。
 - `${name}` 原样拼接需要接口级显式开启，开启后仍存在 SQL 注入风险。
+- 脚本 Worker 与 `vm` 提供执行隔离，但不是对完全不可信代码的强安全沙箱；脚本接口只应开放给可信管理员。
+- 脚本代码以明文存储在 SQLite 中，不能写入密码、令牌或其他密钥。
+- 插件属于可信服务端代码，可调用完整 Node.js 能力，只能由部署人员维护。
+- `SCRIPT_HTTP_ALLOWLIST` 只限制目标域名，未覆盖 DNS rebinding 等高级 SSRF 场景。
 
 ## 最近验证
 
 2026-11-19：
 
-- `npm test`：59 项通过，0 失败。
+- `npm test`：67 项通过，0 失败。
 - `npm run check`：通过。
 - `git diff --check`：通过。
+- 新增脚本专项测试覆盖 Worker 参数与共享脚本注入、数据库查询与事务、脚本超时、HTTP 开关与白名单、插件加载、接口版本与共享脚本版本恢复，以及 schema v2 → v3 迁移。
+- 新增或修改的脚本、插件、版本和迁移 JS 文件逐个通过 `node --check`。
+- 使用临时 SQLite 库在 `127.0.0.1:43119` 再次启动服务，`/magic/api/health` 返回正常，`/magic/api/bootstrap` 返回 `datasources`、`endpoints`、`scripts`、`logs`、`config`，脚本和插件配置均可读取。
 - 新增 SQLite 专项测试覆盖重启后数据源、接口、参数和统计持久化，调用统计批量刷新，旧 JSON 一次性迁移，旧文件保留，以及迁移失败回滚后修复重试。
 - 使用真实 `data/state.json` 的临时副本完成迁移验证：1 个数据源、1 个接口、1 个参数、`callCount=1` 均正确导入，原 JSON 未改动。
 - 使用临时 SQLite 库在 `127.0.0.1:43119` 实际启动服务，`/magic`、`/magic/api/health`、`/magic/api/bootstrap` 和 `/magic/api/openapi.json` 均返回 HTTP 200。

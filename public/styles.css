@@ -455,6 +455,14 @@ a { color: inherit; }
 .code-gutter { padding-right: 9px; color: var(--code-muted); text-align: right; user-select: none; white-space: pre; overflow: hidden; border-right: 1px solid var(--code-line); }
 .code-input { width: 100%; min-height: 330px; resize: vertical; outline: none; background: transparent; color: var(--code-ink); caret-color: var(--accent); scrollbar-color: var(--code-muted) transparent; }
 .code-input::selection { background-color: var(--code-selection-bg); color: var(--code-selection-ink); }
+.code-textarea {
+  min-height: 300px;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.7;
+  resize: vertical;
+  tab-size: 2;
+}
 .code-help { display: flex; flex-wrap: wrap; gap: 8px 18px; padding: 11px 18px; border-top: 1px solid var(--line); background: var(--surface-2); color: var(--muted); font-size: 10px; }
 .code-help b { color: var(--ink-soft); font-family: var(--font-mono); font-weight: 600; }
 

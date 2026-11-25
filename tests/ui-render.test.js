@@ -62,6 +62,19 @@ test('management views render without a browser runtime', async () => {
   assert.match(views.renderApp(), /readonly-badge/);
   assert.match(views.renderApp(), /访问模式/);
 
+  state.view = 'apis';
+  state.apiGroup = '';
+  const defaultGroupHtml = views.renderApp();
+  assert.match(defaultGroupHtml, /data-action="api-group"/);
+  assert.match(defaultGroupHtml, /默认分组/);
+  assert.match(defaultGroupHtml, /data-group="" aria-pressed="true"/);
+  assert.match(defaultGroupHtml, /data-group="用户" aria-pressed="false"/);
+
+  state.apiGroup = '用户';
+  const userGroupHtml = views.renderApp();
+  assert.match(userGroupHtml, /data-group="用户" aria-pressed="true"/);
+  assert.match(userGroupHtml, /用户列表/);
+
   state.editor = {
     ...state.endpoints[0],
     testValues: '{"page":1}',
@@ -76,6 +89,29 @@ test('management views render without a browser runtime', async () => {
   assert.match(editorHtml, /预览 SQL/);
   assert.match(editorHtml, /接口超时（毫秒）/);
   assert.match(editorHtml, /0 = 使用全局 30000/);
+  assert.match(editorHtml, /list="endpoint-group-options"/);
+  assert.match(editorHtml, /placeholder="默认分组"/);
+  assert.match(editorHtml, /<option value="用户"><\/option>/);
+
+  state.scripts = [{
+    name: 'helper',
+    description: '用户辅助函数',
+    enabled: true,
+    code: "return { normalize(value) { return String(value || '').trim(); } };"
+  }];
+  state.config.plugins = [{ name: 'pricing', actions: ['calculate'] }];
+  state.editor = {
+    ...state.editor,
+    engine: 'script',
+    scriptCode: 'return { id: ctx.params.id };',
+    allowHttp: false
+  };
+  const scriptHtml = views.renderApp();
+  assert.match(scriptHtml, /本接口可用 API/);
+  assert.match(scriptHtml, /script-complete-open/);
+  assert.match(scriptHtml, /ctx\.libs\.helper\.normalize/);
+  assert.match(scriptHtml, /查看共享脚本代码/);
+  assert.match(scriptHtml, /script-completion-menu/);
 
   state.modal = { type: 'datasource', title: '添加数据源', data: { datasource: {} } };
   assert.match(views.renderModal(), /datasource-form/);

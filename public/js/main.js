@@ -22,6 +22,7 @@ function applyBootstrap(data) {
 }
 
 function render() {
+  actions?.closeScriptCompletion();
   appRoot.innerHTML = renderApp();
   modalRoot.innerHTML = renderModal();
   attachTransientListeners();
@@ -51,12 +52,15 @@ async function boot() {
   }
 }
 
-const actions = createActions({ render, refreshData, boot });
+let actions = null;
+actions = createActions({ render, refreshData, boot });
 
 document.addEventListener('click', actions.handleClick);
 document.addEventListener('input', actions.handleInput);
 document.addEventListener('change', actions.handleChange);
 document.addEventListener('keydown', actions.handleKeydown);
+document.addEventListener('mousedown', actions.handleMouseDown);
+window.addEventListener('resize', actions.closeScriptCompletion);
 document.addEventListener('submit', (event) => event.preventDefault());
 
 function attachTransientListeners() {
@@ -67,7 +71,14 @@ function attachTransientListeners() {
   }
   const scriptInput = document.getElementById('script-input');
   if (scriptInput) {
-    scriptInput.addEventListener('scroll', () => actions.syncGutter(scriptInput), { passive: true });
+    scriptInput.addEventListener('scroll', () => {
+      actions.syncGutter(scriptInput);
+      actions.closeScriptCompletion();
+    }, { passive: true });
+    scriptInput.addEventListener('click', () => actions.rememberScriptCaret(scriptInput));
+    scriptInput.addEventListener('keyup', () => actions.rememberScriptCaret(scriptInput));
+    scriptInput.addEventListener('select', () => actions.rememberScriptCaret(scriptInput));
+    scriptInput.addEventListener('blur', () => actions.closeScriptCompletion());
     actions.syncGutter(scriptInput);
   }
 }

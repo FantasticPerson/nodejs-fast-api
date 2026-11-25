@@ -19,6 +19,7 @@ export const state = {
   authError: null,
   error: null,
   apiSearch: '',
+  apiGroup: '',
   editor: null,
   modal: null,
   theme: localStorage.getItem('node-magic-theme') || 'light'

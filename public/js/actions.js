@@ -1,4 +1,5 @@
 import { api, ApiError, getAdminToken, setAdminToken } from './api.js';
+import { getScriptCompletions } from './script-completion.js';
 import { cloneEditor, createBlankEditor, state } from './state.js';
 import {
   buildCurl,
@@ -11,9 +12,18 @@ import {
 } from './ui.js';
 
 export function createActions({ render, refreshData, boot }) {
+  let completionState = null;
+  let completionElement = null;
+  let lastScriptEditor = null;
+  let lastScriptCaret = 0;
+
   async function handleClick(event) {
+    const outsideCompletion = !event.target.closest('#script-completion-menu');
     const target = event.target.closest('[data-action]');
-    if (!target) return;
+    if (!target) {
+      if (outsideCompletion) closeScriptCompletion();
+      return;
+    }
     const action = target.dataset.action;
     if (target.disabled) return;
 
@@ -29,6 +39,10 @@ export function createActions({ render, refreshData, boot }) {
           render();
           break;
         }
+        case 'api-group':
+          state.apiGroup = target.dataset.group || '';
+          render();
+          break;
         case 'refresh':
         case 'logs-refresh':
           await refreshData();
@@ -116,6 +130,15 @@ export function createActions({ render, refreshData, boot }) {
           insertSnippet(target.dataset.snippet || '');
           break;
         }
+        case 'script-insert-call':
+          insertScriptCall(target.dataset.snippet || '', target.dataset.caretOffset);
+          break;
+        case 'script-complete-open':
+          openScriptCompletion();
+          break;
+        case 'script-complete-pick':
+          pickScriptCompletion(Number(target.dataset.completionIndex));
+          break;
         case 'editor-extract-params':
           extractParams();
           break;
@@ -310,7 +333,15 @@ export function createActions({ render, refreshData, boot }) {
     }
     if (target.dataset.field && state.editor) {
       syncEditorField(target);
-      if (target.dataset.field === 'sql' || target.dataset.field === 'scriptCode') syncGutter(target);
+      if (target.dataset.field === 'sql') {
+        closeScriptCompletion();
+        syncGutter(target);
+      }
+      if (target.dataset.field === 'scriptCode') {
+        rememberScriptCaret(target);
+        syncGutter(target);
+        updateScriptCompletion(target, false);
+      }
     }
   }
 
@@ -328,6 +359,34 @@ export function createActions({ render, refreshData, boot }) {
   }
 
   function handleKeydown(event) {
+    if (completionState && !state.modal) {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeScriptCompletion();
+        return;
+      }
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault();
+        moveScriptCompletion(event.key === 'ArrowDown' ? 1 : -1);
+        return;
+      }
+      if ((event.key === 'Enter' || event.key === 'Tab') && !event.ctrlKey && !event.metaKey && !event.altKey) {
+        event.preventDefault();
+        pickScriptCompletion(completionState.index);
+        return;
+      }
+      if (['ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown'].includes(event.key)) {
+        closeScriptCompletion();
+      }
+    }
+    const manualTrigger =
+      (event.ctrlKey && (event.code === 'Space' || event.key === ' ')) ||
+      (event.altKey && event.key === '/');
+    if (manualTrigger && document.activeElement?.id === 'script-input' && state.editor?.engine === 'script') {
+      event.preventDefault();
+      updateScriptCompletion(document.activeElement, true);
+      return;
+    }
     if (event.key === 'Escape' && state.modal) {
       state.modal = null;
       render();
@@ -335,6 +394,7 @@ export function createActions({ render, refreshData, boot }) {
     }
     if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && state.editor && !state.modal) {
       event.preventDefault();
+      closeScriptCompletion();
       runEditor(null).catch((error) => showToast(errorMessage(error), 'error'));
     }
   }
@@ -353,6 +413,7 @@ export function createActions({ render, refreshData, boot }) {
     const payload = editorPayload(editor);
     if (editor.id) await api.updateEndpoint(editor.id, payload);
     else await api.createEndpoint(payload);
+    state.apiGroup = String(editor.group || '').trim();
     state.editor = null;
     state.view = 'apis';
     await refreshData();
@@ -467,6 +528,267 @@ export function createActions({ render, refreshData, boot }) {
     area.focus();
     area.selectionStart = area.selectionEnd = start + snippet.length;
     area.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+
+  function rememberScriptCaret(area) {
+    if (!state.editor || !area) return;
+    lastScriptEditor = state.editor;
+    lastScriptCaret = Math.max(0, Math.min(area.selectionStart || 0, area.value.length));
+  }
+
+  function closeScriptCompletion() {
+    completionState = null;
+    if (completionElement) {
+      completionElement.remove();
+      completionElement = null;
+    }
+  }
+
+  function openScriptCompletion() {
+    const area = document.getElementById('script-input');
+    if (!area || !state.editor || state.editor.engine !== 'script') return;
+    const caret = lastScriptEditor === state.editor
+      ? Math.max(0, Math.min(lastScriptCaret, area.value.length))
+      : area.value.length;
+    area.focus({ preventScroll: true });
+    area.setSelectionRange(caret, caret);
+    updateScriptCompletion(area, true);
+  }
+
+  function updateScriptCompletion(area, manual) {
+    if (!area || !state.editor || state.editor.engine !== 'script') {
+      closeScriptCompletion();
+      return;
+    }
+    rememberScriptCaret(area);
+    if (area.selectionStart !== area.selectionEnd) {
+      closeScriptCompletion();
+      return;
+    }
+    const result = getScriptCompletions({
+      source: area.value,
+      caret: area.selectionStart,
+      params: state.editor.params || [],
+      libraries: state.scripts || [],
+      plugins: state.config.plugins || [],
+      manual: Boolean(manual)
+    });
+    if (!result) {
+      closeScriptCompletion();
+      if (manual) showToast('当前位置没有可用的脚本提示');
+      return;
+    }
+    completionState = { ...result, index: 0, textareaId: area.id };
+    renderScriptCompletion();
+  }
+
+  function renderScriptCompletion() {
+    if (!completionState) return;
+    if (completionElement) {
+      completionElement.remove();
+      completionElement = null;
+    }
+    const menu = document.createElement('div');
+    menu.id = 'script-completion-menu';
+    menu.className = 'completion-menu';
+    menu.setAttribute('role', 'listbox');
+    menu.setAttribute('aria-label', '脚本补全');
+    const heading = document.createElement('div');
+    heading.className = 'completion-heading';
+    heading.textContent = completionState.chain.length
+      ? `${completionState.chain.join('.')}.${completionState.token}`
+      : '脚本 API';
+    menu.appendChild(heading);
+    const kindLabels = {
+      object: 'obj',
+      property: 'prop',
+      method: 'fn',
+      parameter: 'param',
+      keyword: 'kw',
+      library: 'lib',
+      plugin: 'plug'
+    };
+    completionState.options.forEach((option, index) => {
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.className = `completion-item${index === completionState.index ? ' active' : ''}`;
+      item.dataset.action = 'script-complete-pick';
+      item.dataset.completionIndex = String(index);
+      item.setAttribute('role', 'option');
+      item.setAttribute('aria-selected', index === completionState.index ? 'true' : 'false');
+      const kind = document.createElement('span');
+      kind.className = `completion-kind completion-kind-${option.kind}`;
+      kind.textContent = kindLabels[option.kind] || 'api';
+      const main = document.createElement('span');
+      main.className = 'completion-main';
+      const label = document.createElement('span');
+      label.className = 'completion-label';
+      label.textContent = option.label;
+      main.appendChild(label);
+      if (option.detail) {
+        const detail = document.createElement('span');
+        detail.className = 'completion-detail';
+        detail.textContent = option.detail;
+        main.appendChild(detail);
+      }
+      item.append(kind, main);
+      if (option.description) {
+        const description = document.createElement('span');
+        description.className = 'completion-description';
+        description.textContent = option.description;
+        item.appendChild(description);
+      }
+      menu.appendChild(item);
+    });
+    const foot = document.createElement('div');
+    foot.className = 'completion-foot';
+    foot.textContent = '↑↓ 选择 · Enter/Tab 插入 · Esc 关闭';
+    menu.appendChild(foot);
+    document.body.appendChild(menu);
+    completionElement = menu;
+    positionScriptCompletion();
+    scrollActiveCompletionIntoView();
+  }
+
+  function positionScriptCompletion() {
+    if (!completionState || !completionElement) return;
+    const area = document.getElementById(completionState.textareaId);
+    if (!area) {
+      closeScriptCompletion();
+      return;
+    }
+    const point = caretCoordinates(area, completionState.from);
+    const lineHeight = Number.parseFloat(getComputedStyle(area).lineHeight) || 20;
+    let left = point.left;
+    let top = point.top + lineHeight + 4;
+    if (top + completionElement.offsetHeight > window.innerHeight - 8) {
+      top = point.top - completionElement.offsetHeight - 4;
+    }
+    left = Math.max(8, Math.min(left, window.innerWidth - completionElement.offsetWidth - 8));
+    top = Math.max(8, top);
+    completionElement.style.left = `${left}px`;
+    completionElement.style.top = `${top}px`;
+  }
+
+  function moveScriptCompletion(direction) {
+    if (!completionState || !completionState.options.length) return;
+    const count = completionState.options.length;
+    completionState.index = (completionState.index + direction + count) % count;
+    for (const item of completionElement?.querySelectorAll('[data-completion-index]') || []) {
+      const active = Number(item.dataset.completionIndex) === completionState.index;
+      item.classList.toggle('active', active);
+      item.setAttribute('aria-selected', active ? 'true' : 'false');
+    }
+    scrollActiveCompletionIntoView();
+  }
+
+  function scrollActiveCompletionIntoView() {
+    if (!completionElement) return;
+    const active = completionElement.querySelector('.completion-item.active');
+    if (!active) return;
+    if (active.offsetTop < completionElement.scrollTop) {
+      completionElement.scrollTop = active.offsetTop;
+    } else if (active.offsetTop + active.offsetHeight > completionElement.scrollTop + completionElement.clientHeight) {
+      completionElement.scrollTop = active.offsetTop + active.offsetHeight - completionElement.clientHeight;
+    }
+  }
+
+  function pickScriptCompletion(index) {
+    if (!completionState) return;
+    const option = completionState.options[index];
+    const area = document.getElementById(completionState.textareaId);
+    if (!option || !area) {
+      closeScriptCompletion();
+      return;
+    }
+    let text = option.insertText || option.label;
+    let caretOffset = text.length;
+    if (option.cursorOffset !== undefined) {
+      caretOffset = Number(option.cursorOffset);
+    } else if (option.call) {
+      if (area.value[completionState.to] === '(') {
+        caretOffset = text.length + 1;
+      } else {
+        text = `${text}()`;
+        caretOffset = text.length - 1;
+      }
+    }
+    replaceScriptText(
+      area,
+      completionState.from,
+      completionState.to,
+      text,
+      completionState.from + caretOffset
+    );
+  }
+
+  function insertScriptCall(snippet, caretOffset) {
+    const area = document.getElementById('script-input');
+    if (!area || !state.editor || state.editor.engine !== 'script') return;
+    let from = area.value.length;
+    let to = from;
+    if (document.activeElement === area) {
+      from = area.selectionStart || 0;
+      to = area.selectionEnd || from;
+    } else if (lastScriptEditor === state.editor) {
+      from = Math.max(0, Math.min(lastScriptCaret, area.value.length));
+      to = from;
+    }
+    const offset = caretOffset === undefined || caretOffset === ''
+      ? snippet.length
+      : Math.max(0, Math.min(Number(caretOffset), snippet.length));
+    replaceScriptText(area, from, to, snippet, from + offset);
+  }
+
+  function replaceScriptText(area, from, to, text, caret) {
+    if (!state.editor) return;
+    closeScriptCompletion();
+    const value = area.value;
+    const next = `${value.slice(0, from)}${text}${value.slice(to)}`;
+    state.editor.scriptCode = next;
+    area.value = next;
+    area.focus({ preventScroll: true });
+    area.setSelectionRange(caret, caret);
+    rememberScriptCaret(area);
+    area.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+
+  function caretCoordinates(area, position) {
+    const computed = getComputedStyle(area);
+    const mirror = document.createElement('div');
+    const properties = [
+      'boxSizing', 'overflowX', 'overflowY', 'borderStyle', 'borderTopWidth',
+      'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth', 'paddingTop',
+      'paddingRight', 'paddingBottom', 'paddingLeft', 'fontStyle', 'fontVariant',
+      'fontWeight', 'fontStretch', 'fontSize', 'fontSizeAdjust', 'lineHeight',
+      'fontFamily', 'textAlign', 'textTransform', 'textIndent', 'textDecoration',
+      'letterSpacing', 'wordSpacing', 'tabSize', 'whiteSpace', 'wordWrap',
+      'wordBreak', 'overflowWrap'
+    ];
+    for (const property of properties) mirror.style[property] = computed[property];
+    mirror.style.position = 'absolute';
+    mirror.style.visibility = 'hidden';
+    mirror.style.top = '-9999px';
+    mirror.style.left = '0';
+    mirror.style.width = `${area.clientWidth}px`;
+    mirror.style.height = 'auto';
+    mirror.style.whiteSpace = 'pre-wrap';
+    mirror.style.overflowWrap = 'break-word';
+    const before = area.value.slice(0, position);
+    const marker = document.createElement('span');
+    marker.textContent = '\u200b';
+    mirror.textContent = before;
+    mirror.appendChild(marker);
+    document.body.appendChild(mirror);
+    const mirrorRect = mirror.getBoundingClientRect();
+    const markerRect = marker.getBoundingClientRect();
+    const areaRect = area.getBoundingClientRect();
+    const point = {
+      left: areaRect.left + markerRect.left - mirrorRect.left - area.scrollLeft,
+      top: areaRect.top + markerRect.top - mirrorRect.top - area.scrollTop
+    };
+    mirror.remove();
+    return point;
   }
 
   function extractParams() {
@@ -812,9 +1134,14 @@ export function createActions({ render, refreshData, boot }) {
 
   function filterApiRows(query) {
     const needle = String(query || '').trim().toLowerCase();
+    let visible = 0;
     for (const row of document.querySelectorAll('.endpoint-row[data-search]')) {
-      row.classList.toggle('is-filtered', Boolean(needle) && !row.dataset.search.includes(needle));
+      const filtered = Boolean(needle) && !row.dataset.search.includes(needle);
+      row.classList.toggle('is-filtered', filtered);
+      if (!filtered) visible += 1;
     }
+    const empty = document.querySelector('.api-search-empty');
+    if (empty) empty.classList.toggle('is-filtered', !needle || visible > 0);
   }
 
   function filterTableRows(query) {
@@ -834,7 +1161,20 @@ export function createActions({ render, refreshData, boot }) {
     gutter.scrollTop = textarea.scrollTop;
   }
 
-  return { handleClick, handleInput, handleChange, handleKeydown, syncGutter };
+  function handleMouseDown(event) {
+    if (event.target.closest('[data-completion-index]')) event.preventDefault();
+  }
+
+  return {
+    handleClick,
+    handleInput,
+    handleChange,
+    handleKeydown,
+    handleMouseDown,
+    syncGutter,
+    rememberScriptCaret,
+    closeScriptCompletion
+  };
 }
 
 function formObject(form) {

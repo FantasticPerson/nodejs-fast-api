@@ -1,4 +1,5 @@
 import { state } from './state.js';
+import { extractLibraryMethods, SCRIPT_API_QUICK_REFERENCE } from './script-completion.js';
 import {
   buildCurl,
   buildTestValues,
@@ -31,6 +32,29 @@ const ICONS = {
   table: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M9 10v10"/></svg>',
   spark: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 1.5 5.5L19 10l-5.5 1.5L12 17l-1.5-5.5L5 10l5.5-1.5L12 3Z"/></svg>'
 };
+
+const DEFAULT_API_GROUP = '';
+
+function endpointGroupName(endpoint) {
+  return String(endpoint?.group || '').trim();
+}
+
+function collectEndpointGroups(endpoints) {
+  const counts = new Map([[DEFAULT_API_GROUP, 0]]);
+  for (const endpoint of endpoints) {
+    const name = endpointGroupName(endpoint);
+    counts.set(name, (counts.get(name) || 0) + 1);
+  }
+  return Array.from(counts, ([name, count]) => ({ name, count })).sort((left, right) => {
+    if (!left.name) return -1;
+    if (!right.name) return 1;
+    return left.name.localeCompare(right.name, 'zh-CN');
+  });
+}
+
+function endpointSearchText(endpoint) {
+  return `${endpoint.name} ${endpoint.method} ${endpoint.path} ${datasourceName(endpoint.datasourceId)} ${endpointGroupName(endpoint)}`.toLowerCase();
+}
 
 export function renderApp() {
   return `<div class="shell">
@@ -163,6 +187,12 @@ function renderApis() {
   const active = state.endpoints.filter((item) => item.enabled).length;
   const calls = state.endpoints.reduce((sum, item) => sum + Number(item.callCount || 0), 0);
   const noDatasource = state.datasources.length === 0;
+  const groups = collectEndpointGroups(state.endpoints);
+  const selectedGroup = groups.find((group) => group.name === (state.apiGroup || '')) || groups[0];
+  const groupEndpoints = state.endpoints.filter((endpoint) => endpointGroupName(endpoint) === selectedGroup.name);
+  const search = String(state.apiSearch || '').trim().toLowerCase();
+  const visibleCount = groupEndpoints.filter((endpoint) => !search || endpointSearchText(endpoint).includes(search)).length;
+  const groupLabel = selectedGroup.name || '默认分组';
   return `<div class="view-head">
     <div>
       <span class="eyebrow">API WORKBENCH</span>
@@ -180,17 +210,37 @@ function renderApis() {
     <div class="metric-card"><span class="eyebrow">DATASOURCES</span><strong>${formatNumber(state.datasources.length)}</strong><small>MySQL / Oracle</small></div>
     <div class="metric-card"><span class="eyebrow">CALLS</span><strong>${formatNumber(calls)}</strong><small>累计调用次数</small></div>
   </div>
-  <div class="list-toolbar">
-    <div>
-      <h2>接口列表</h2>
-      <span class="muted">${state.endpoints.length ? '点击任意接口继续编辑' : '还没有接口'}</span>
-    </div>
-    <div class="search-box">
-      <span>⌕</span>
-      <input id="api-search" placeholder="搜索名称、路径或方法" value="${escapeHtml(state.apiSearch)}" autocomplete="off">
-    </div>
-  </div>
-  ${state.endpoints.length ? renderEndpointList() : renderEmptyEndpoints()}`;
+  <div class="api-workspace">
+    <aside class="api-group-panel" aria-label="接口分组">
+      <div class="api-group-head">
+        <span class="eyebrow">GROUPS</span>
+        <h2>分组</h2>
+      </div>
+      <div class="api-group-list">
+        ${groups.map((group) => `<button class="api-group-item${group.name === selectedGroup.name ? ' active' : ''}" data-action="api-group" data-group="${escapeHtml(group.name)}" aria-pressed="${group.name === selectedGroup.name ? 'true' : 'false'}">
+          <span class="api-group-name">${escapeHtml(group.name || '默认分组')}</span>
+          <span class="api-group-count">${formatNumber(group.count)}</span>
+        </button>`).join('')}
+      </div>
+    </aside>
+    <section class="api-group-content" aria-label="${escapeHtml(groupLabel)}接口列表">
+      <div class="list-toolbar">
+        <div>
+          <h2>接口列表</h2>
+          <span class="muted">${escapeHtml(groupLabel)} · ${formatNumber(groupEndpoints.length)} 个接口${search ? ` · ${formatNumber(visibleCount)} 个匹配` : ''}</span>
+        </div>
+        <div class="search-box">
+          <span>⌕</span>
+          <input id="api-search" placeholder="搜索当前分组" value="${escapeHtml(state.apiSearch)}" autocomplete="off">
+        </div>
+      </div>
+      ${state.endpoints.length
+        ? groupEndpoints.length
+          ? renderEndpointList(groupEndpoints, state.apiSearch)
+          : renderEmptyGroup(groupLabel)
+        : renderEmptyEndpoints()}
+    </section>
+  </div>`;
 }
 
 function renderOnboarding() {
@@ -204,13 +254,16 @@ function renderOnboarding() {
   </div>`;
 }
 
-function renderEndpointList() {
+function renderEndpointList(endpoints = state.endpoints, query = '') {
+  const needle = String(query || '').trim().toLowerCase();
+  const anyMatch = endpoints.some((endpoint) => !needle || endpointSearchText(endpoint).includes(needle));
   return `<div class="endpoint-list">
-    ${state.endpoints
+    ${endpoints
       .map((endpoint) => {
         const fullPath = `${state.config.openapiPath}${endpoint.path === '/' ? '/' : endpoint.path}`;
-        const search = `${endpoint.name} ${endpoint.method} ${endpoint.path} ${datasourceName(endpoint.datasourceId)}`.toLowerCase();
-        return `<div class="endpoint-row" data-search="${escapeHtml(search)}">
+        const search = endpointSearchText(endpoint);
+        const filtered = needle && !search.includes(needle);
+        return `<div class="endpoint-row${filtered ? ' is-filtered' : ''}" data-search="${escapeHtml(search)}">
           <button class="endpoint-main" data-action="api-edit" data-id="${escapeHtml(endpoint.id)}">
             <span class="method-badge ${methodClass(endpoint.method)}">${escapeHtml(endpoint.method)}</span>
             <span class="endpoint-copy">
@@ -236,6 +289,20 @@ function renderEndpointList() {
         </div>`;
       })
       .join('')}
+  </div>
+  ${needle ? `<div class="api-search-empty${anyMatch ? ' is-filtered' : ''}">
+    <strong>当前分组没有匹配的接口</strong>
+    <p>换个关键词，或切换到其他分组继续查找。</p>
+  </div>` : ''}`;
+}
+
+function renderEmptyGroup(groupName) {
+  const isDefault = groupName === '默认分组';
+  return `<div class="group-empty">
+    <span class="eyebrow">EMPTY GROUP</span>
+    <h2>${escapeHtml(groupName)}还没有接口</h2>
+    <p>${isDefault ? '新建接口时分组留空，就会归入默认分组。' : `新建接口时把分组填成「${escapeHtml(groupName)}」，接口就会归入这里。`}</p>
+    <button class="primary-button" data-action="api-new">${ICONS.plus}<span>新建接口</span></button>
   </div>`;
 }
 
@@ -283,6 +350,9 @@ function renderEditor() {
 }
 
 function renderRouteCard(editor) {
+  const groupOptions = collectEndpointGroups(state.endpoints)
+    .filter((group) => group.name)
+    .map((group) => group.name);
   return `<section class="editor-card">
     <div class="card-head"><div><span class="eyebrow">ROUTE</span><h2>接口信息</h2></div><span class="card-note">保存后立即生效</span></div>
     <div class="form-grid">
@@ -309,9 +379,14 @@ function renderRouteCard(editor) {
             .join('')}
         </select>
       </label>
-      <label class="field"><span>分组（可选）</span><input data-field="group" value="${escapeHtml(editor.group || '')}" placeholder="例如：用户中心"></label>
+      <label class="field"><span>分组</span><input data-field="group" list="endpoint-group-options" value="${escapeHtml(editor.group || '')}" placeholder="默认分组">
+        <small class="field-help">不填写即默认分组，可选择已有分组或直接输入新名称。</small>
+      </label>
       <label class="field field-span-2"><span>描述（可选）</span><textarea rows="2" data-field="description" placeholder="说明这个接口的用途、参数或返回结构">${escapeHtml(editor.description || '')}</textarea></label>
     </div>
+    <datalist id="endpoint-group-options">
+      ${groupOptions.map((group) => `<option value="${escapeHtml(group)}"></option>`).join('')}
+    </datalist>
   </section>`;
 }
 
@@ -353,16 +428,65 @@ function renderScriptCard(editor) {
     </div>
     <div class="code-shell">
       <pre class="code-gutter" id="script-gutter">${gutter}</pre>
-      <textarea id="script-input" class="code-input" data-field="scriptCode" spellcheck="false" autocomplete="off">${escapeHtml(editor.scriptCode)}</textarea>
+      <textarea id="script-input" class="code-input" data-field="scriptCode" spellcheck="false" autocomplete="off" aria-autocomplete="list" aria-controls="script-completion-menu">${escapeHtml(editor.scriptCode)}</textarea>
     </div>
     <div class="code-help">
       <span><b>ctx.params</b> 请求参数</span>
       <span><b>db.query / queryOne / execute</b> 数据库调用</span>
       <span><b>db.transaction</b> 多语句事务</span>
+      <span><b>ctx.libs</b> 共享脚本方法</span>
       <span><b>return</b> 返回 JSON 数据</span>
     </div>
+    ${renderScriptApiReference()}
     <div class="notice notice-info"><div><strong>执行环境</strong><p>脚本在独立 Worker 中运行，只暴露受控的数据库、HTTP 和插件接口，不提供 require、process 和文件系统。</p></div></div>
   </section>`;
+}
+
+function renderScriptApiReference() {
+  const libraries = state.scripts.filter((library) => library.enabled !== false);
+  const plugins = state.config.plugins || [];
+  return `<div class="script-api-panel">
+    <div class="script-api-head">
+      <div>
+        <span class="eyebrow">SCRIPT API</span>
+        <strong>本接口可用 API</strong>
+        <p>输入 <code>ctx.</code> 自动提示；按 <kbd>Ctrl</kbd> + <kbd>Space</kbd> 手动打开补全。</p>
+      </div>
+      <button class="tiny-button" data-action="script-complete-open">打开补全</button>
+    </div>
+    <div class="script-api-quick">
+      ${SCRIPT_API_QUICK_REFERENCE.map((item) => `<button class="api-ref-chip" data-action="script-insert-call" data-snippet="${escapeHtml(item.snippet)}"${item.caretOffset !== undefined ? ` data-caret-offset="${item.caretOffset}"` : ''} title="${escapeHtml(item.description)}">
+        <code>${escapeHtml(item.label)}</code><small>${escapeHtml(item.description)}</small>
+      </button>`).join('')}
+    </div>
+    <div class="script-api-section">
+      <div class="script-api-section-head">
+        <strong>共享脚本</strong>
+        <span>${libraries.length} 个启用${plugins.length ? ` · ${plugins.length} 个插件` : ''}</span>
+      </div>
+      ${libraries.length ? `<div class="shared-script-reference">${libraries.map(renderSharedScriptReference).join('')}</div>` : '<div class="script-api-empty">暂无启用的共享脚本。启用后会出现在 <code>ctx.libs</code> 补全中。</div>'}
+    </div>
+  </div>`;
+}
+
+function renderSharedScriptReference(library) {
+  const methods = extractLibraryMethods(library.code);
+  const base = `ctx.libs.${library.name}.`;
+  return `<article class="shared-script-reference-item">
+    <div class="shared-script-reference-head">
+      <div><code>ctx.libs.${escapeHtml(library.name)}</code><small>${escapeHtml(library.description || '共享脚本')}</small></div>
+      <button class="tiny-button" data-action="script-insert-call" data-snippet="${escapeHtml(base)}" title="插入引用并打开方法补全">插入</button>
+    </div>
+    <div class="shared-method-list">
+      ${methods.length ? methods.map((method) => {
+        const snippet = `${base}${method.name}${method.call ? '()' : ''}`;
+        return `<button class="shared-method-chip" data-action="script-insert-call" data-snippet="${escapeHtml(snippet)}"${method.call ? ` data-caret-offset="${snippet.length - 1}"` : ''} title="${escapeHtml(method.description || method.signature)}">
+          <code>${escapeHtml(method.signature)}</code>${method.description ? `<small>${escapeHtml(method.description)}</small>` : ''}
+        </button>`;
+      }).join('') : '<span class="shared-method-empty">未静态识别到方法，请查看下方代码。</span>'}
+    </div>
+    <details class="shared-code"><summary>查看共享脚本代码</summary><pre>${escapeHtml(library.code)}</pre></details>
+  </article>`;
 }
 
 function renderParamsCard(editor) {

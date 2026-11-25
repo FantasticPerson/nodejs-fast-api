@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Node Magic API Studio 操作手册</title>
+  <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/manual.css">
+  <script defer src="/js/manual.js"></script>
+</head>
+<body class="manual-page">
+  <header class="manual-topbar">
+    <a class="manual-brand" href="/magic">
+      <span class="manual-brand-mark">N</span>
+      <span><strong>Node Magic</strong><small>API Studio</small></span>
+    </a>
+    <span class="manual-topbar-title">操作手册</span>
+    <div class="manual-topbar-actions">
+      <span class="manual-updated">更新于 2026-11-25</span>
+      <a class="manual-button" href="/magic">返回管理台</a>
+    </div>
+  </header>
+
+  <div class="manual-shell">
+    <aside class="manual-toc" aria-label="手册目录">
+      <span class="eyebrow">CONTENTS</span>
+      <nav>
+        <a href="#quick-start">快速开始</a>
+        <a href="#navigation">管理台导航</a>
+        <a href="#datasource">数据源管理</a>
+        <a href="#crud">一键生成 CRUD</a>
+        <a href="#groups">接口与分组</a>
+        <a href="#sql-api">SQL 接口</a>
+        <a href="#script-api">JavaScript 脚本接口</a>
+        <a href="#shared-scripts">共享脚本</a>
+        <a href="#testing">调试与调用日志</a>
+        <a href="#documentation">接口文档与调用</a>
+        <a href="#versions">版本历史</a>
+        <a href="#troubleshooting">常见问题</a>
+        <a href="#maintenance">维护约定</a>
+      </nav>
+      <p>本手册随功能同步更新。遇到操作方式变化时，以这里的说明为准。</p>
+    </aside>
+
+    <main class="manual-content">
+      <header class="manual-hero">
+        <span class="eyebrow">OPERATIONS MANUAL</span>
+        <h1>Node Magic API Studio<br>操作手册</h1>
+        <p>从添加数据源、创建接口、配置脚本，到调试、发布和排错，都按真实管理台流程整理。第一次使用时建议从「快速开始」顺序阅读。</p>
+        <div class="manual-meta-grid">
+          <div><span>管理台</span><code>/magic</code></div>
+          <div><span>操作手册</span><code>/manual</code></div>
+          <div><span>OpenAPI</span><code>/magic/api/openapi.json</code></div>
+        </div>
+      </header>
+
+      <section id="quick-start" class="manual-section">
+        <span class="manual-section-no">01</span>
+        <h2>快速开始</h2>
+        <ol class="manual-steps">
+          <li><strong>确认运行环境。</strong>Node.js 需要 22.14 或更高版本；需要连接 MySQL / Oracle 时再安装对应驱动。</li>
+          <li><strong>安装并启动。</strong>在项目目录执行 <code>npm install</code>，然后执行 <code>npm start</code>。</li>
+          <li><strong>打开管理台。</strong>浏览器访问 <code>http://127.0.0.1:3000/magic</code>。</li>
+          <li><strong>添加数据源。</strong>进入「数据源」，新增 MySQL 或 Oracle 连接并测试连接。</li>
+          <li><strong>创建第一个接口。</strong>可以浏览表结构后一键生成 CRUD，也可以点击「新建接口」手写 SQL 或 JavaScript 脚本。</li>
+        </ol>
+        <div class="manual-note manual-note-info">
+          <strong>服务检查</strong>
+          <p>启动后可访问 <code>/magic/api/health</code> 检查服务状态。数据库驱动未安装时管理台仍可启动，但对应数据源无法连接。</p>
+        </div>
+      </section>
+
+      <section id="navigation" class="manual-section">
+        <span class="manual-section-no">02</span>
+        <h2>管理台导航</h2>
+        <div class="manual-card-grid">
+          <article><h3>接口</h3><p>按分组查看、创建、编辑、启停和删除 SQL / JavaScript 接口。</p></article>
+          <article><h3>共享脚本</h3><p>维护多个脚本接口可复用的公共函数，并查看版本历史。</p></article>
+          <article><h3>数据源</h3><p>配置 MySQL / Oracle 连接、测试连接、浏览表结构、生成 CRUD。</p></article>
+          <article><h3>调用日志</h3><p>查看最近 200 次运行记录、状态码、耗时和错误信息。</p></article>
+          <article><h3>接口文档</h3><p>查看已启用接口的 OpenAPI 信息和 cURL 示例。</p></article>
+          <article><h3>操作手册</h3><p>在新窗口打开当前页面，功能入口和操作变化会同步记录在这里。</p></article>
+        </div>
+      </section>
+
+      <section id="datasource" class="manual-section">
+        <span class="manual-section-no">03</span>
+        <h2>数据源管理</h2>
+        <h3>添加 MySQL</h3>
+        <p>进入「数据源」→「添加数据源」，填写主机、端口、数据库名、用户名和密码，然后点击「测试连接」。MySQL 默认端口为 <code>3306</code>。</p>
+        <h3>添加 Oracle</h3>
+        <p>Oracle 默认端口为 <code>1521</code>。连接方式必须明确选择：</p>
+        <ul>
+          <li><strong>服务名：</strong>连接串形如 <code>HOST:PORT/SERVICE_NAME</code>。</li>
+          <li><strong>SID：</strong>连接串形如 <code>HOST:PORT:SID</code>。</li>
+        </ul>
+        <p>Oracle 11g 需要 Oracle Client 库并启用 Thick 模式；Oracle 12.1 及以上可以使用默认 Thin 模式。详细部署步骤见项目根目录的 <code>docs/offline-deployment.md</code>。</p>
+        <h3>只读数据源</h3>
+        <p>开启「只读数据源」后，只允许查询语句；写接口仍然保留，但运行时会返回 HTTP 403 和错误码 <code>DATASOURCE_READ_ONLY</code>。自动 CRUD 对只读数据源只生成查询接口。</p>
+        <div class="manual-note manual-note-warn">
+          <strong>密码安全</strong>
+          <p>数据源密码只加密落盘，不会出现在接口响应、调用日志或错误消息中。不要把管理台直接暴露到公网。</p>
+        </div>
+      </section>
+
+      <section id="crud" class="manual-section">
+        <span class="manual-section-no">04</span>
+        <h2>一键生成 CRUD</h2>
+        <ol class="manual-steps">
+          <li>在数据源卡片点击「浏览表」。</li>
+          <li>选择目标表，确认字段、主键和字段是否可空。</li>
+          <li>点击「生成 CRUD」，设置路径前缀和需要生成的方法。</li>
+          <li>查看预览后确认创建，接口会立即出现在「接口」页。</li>
+        </ol>
+        <p>生成接口默认使用表名作为分组名，可在接口编辑页改成其他分组。只读数据源不会生成新增、更新和删除接口。</p>
+        <div class="manual-note">
+          <strong>主键限制</strong>
+          <p>联合主键暂不支持自动 CRUD，请改用自定义 SQL 接口。没有单列主键的表通常只能生成列表和新增。</p>
+        </div>
+      </section>
+
+      <section id="groups" class="manual-section">
+        <span class="manual-section-no">05</span>
+        <h2>接口与分组</h2>
+        <p>「接口」页左侧是分组导航，右侧只显示当前分组中的接口。</p>
+        <ul>
+          <li><strong>默认分组：</strong>始终排在第一，分组字段留空的接口归入这里。</li>
+          <li><strong>自定义分组：</strong>接口填写分组后自动出现在导航中，按名称排序并显示接口数量。</li>
+          <li><strong>切换分组：</strong>点击任意分组，右侧列表和搜索范围都会切换到该组。</li>
+        </ul>
+        <h3>编辑接口分组</h3>
+        <p>编辑接口时，分组输入框支持三种方式：</p>
+        <ul>
+          <li>完全留空，保存后归入「默认分组」。</li>
+          <li>从下拉建议中选择已经存在的分组。</li>
+          <li>直接输入新名称，保存后创建新的分组。</li>
+        </ul>
+        <p>保存接口后会回到它所属的分组，方便继续编辑同组接口。</p>
+      </section>
+
+      <section id="sql-api" class="manual-section">
+        <span class="manual-section-no">06</span>
+        <h2>SQL 接口</h2>
+        <p>点击「新建接口」，实现方式选择「SQL 接口」，然后填写接口名称、请求方法、接口路径、数据源和 SQL 模板。</p>
+        <h3>安全参数绑定</h3>
+        <pre class="manual-code"><code>SELECT id, name
+FROM users
+WHERE id = #{id}</code></pre>
+        <p><code>#{name}</code> 会转换成数据库绑定参数，默认推荐使用。<code>${name}</code> 会原样拼接，只有在接口选项里显式开启「允许原样 SQL」后才可使用。</p>
+        <h3>动态 SQL 标签</h3>
+        <pre class="manual-code"><code>&lt;if test="name != null and name != ''"&gt;
+  AND name LIKE CONCAT('%', #{name}, '%')
+&lt;/if&gt;
+
+&lt;foreach collection="ids" item="id" separator=","&gt;
+  #{id}
+&lt;/foreach&gt;</code></pre>
+        <p>支持 <code>&lt;if&gt;</code>、<code>&lt;choose&gt;</code>、<code>&lt;foreach&gt;</code>、<code>&lt;set&gt;</code> 和 <code>&lt;where&gt;</code> 等动态标签。</p>
+        <h3>分页与响应</h3>
+        <p>开启自动分页后，接口会接收 <code>page</code>、<code>pageSize</code>，并自动追加总数查询。响应模式可以选择统一包装 <code>{ code, message, data }</code>，或直接返回数据。</p>
+      </section>
+
+      <section id="script-api" class="manual-section">
+        <span class="manual-section-no">07</span>
+        <h2>JavaScript 脚本接口</h2>
+        <p>实现方式切换到「JavaScript 业务脚本」后，脚本在独立 Worker 中运行，不提供 <code>require</code>、<code>process</code> 和文件系统。</p>
+        <h3>常用上下文</h3>
+        <table class="manual-table">
+          <thead><tr><th>API</th><th>用途</th></tr></thead>
+          <tbody>
+            <tr><td><code>ctx.params</code></td><td>当前接口参数</td></tr>
+            <tr><td><code>ctx.request</code></td><td>请求信息，如 method、path、query、body、headers</td></tr>
+            <tr><td><code>ctx.endpoint</code></td><td>当前接口元信息</td></tr>
+            <tr><td><code>ctx.libs</code></td><td>已启用的共享脚本，通过 <code>ctx.libs.名称.函数()</code> 调用</td></tr>
+            <tr><td><code>ctx.plugins</code></td><td>服务端插件提供的 action</td></tr>
+            <tr><td><code>ctx.logger</code></td><td>写入脚本运行日志</td></tr>
+            <tr><td><code>db</code></td><td><code>query</code>、<code>queryOne</code>、<code>execute</code>、<code>transaction</code></td></tr>
+            <tr><td><code>http</code></td><td><code>fetch</code>，需接口开启外部 HTTP 且命中服务端白名单</td></tr>
+          </tbody>
+        </table>
+        <h3>返回数据</h3>
+        <pre class="manual-code"><code>const row = await db.queryOne(
+  'SELECT id, name FROM users WHERE id = #{id}',
+  { id: ctx.params.id }
+);
+
+ctx.logger.info('loaded user', row.id);
+return row;</code></pre>
+        <h3>补全与速查卡</h3>
+        <p>输入 <code>ctx.</code>、<code>db.</code>、<code>ctx.libs.</code> 等前缀会自动出现补全；也可以按 <kbd>Ctrl</kbd> + <kbd>Space</kbd> 手动打开。macOS 还支持 <kbd>Option</kbd> + <kbd>/</kbd>。</p>
+        <ul>
+          <li><kbd>↑</kbd> / <kbd>↓</kbd> 切换候选，<kbd>Enter</kbd> 或 <kbd>Tab</kbd> 插入，<kbd>Esc</kbd> 关闭。</li>
+          <li>字符串和注释内部不会触发补全。</li>
+          <li>共享脚本方法通过静态解析顶层 <code>return { ... }</code> 获取；动态对象或展开运算无法识别时，会展示完整源码供手动查看。</li>
+        </ul>
+        <div class="manual-note manual-note-warn">
+          <strong>外部 HTTP</strong>
+          <p>接口开启「允许外部 HTTP」只是第一步，目标域名还必须命中服务端的 <code>SCRIPT_HTTP_ALLOWLIST</code> 白名单。</p>
+        </div>
+      </section>
+
+      <section id="shared-scripts" class="manual-section">
+        <span class="manual-section-no">08</span>
+        <h2>共享脚本</h2>
+        <p>「共享脚本」页用于维护可复用的公共函数。只有启用的共享脚本会出现在脚本接口的 <code>ctx.libs</code> 补全和速查卡中。</p>
+        <pre class="manual-code"><code>return {
+  normalize(value) {
+    return String(value || '').trim().toLowerCase();
+  },
+  async findUser(id) {
+    return await ctx.db.queryOne('SELECT id, name FROM users WHERE id = #{id}', { id });
+  }
+};</code></pre>
+        <p>在业务脚本中这样调用：</p>
+        <pre class="manual-code"><code>const name = ctx.libs.helpers.normalize(ctx.params.name);</code></pre>
+        <p>共享脚本支持启停、描述、版本快照和恢复。修改共享脚本后，所有引用它的接口在下一次调用时使用新版本。</p>
+      </section>
+
+      <section id="testing" class="manual-section">
+        <span class="manual-section-no">09</span>
+        <h2>调试与调用日志</h2>
+        <ol class="manual-steps">
+          <li>在编辑页右侧的「测试参数 JSON」填写请求参数。</li>
+          <li>SQL 接口可以点击「预览 SQL」检查绑定结果，再点击「运行接口」执行真实查询。</li>
+          <li>脚本接口点击「运行脚本」，页面会显示返回结果和脚本日志。</li>
+          <li>快捷键 <kbd>⌘</kbd> / <kbd>Ctrl</kbd> + <kbd>Enter</kbd> 可以运行当前接口。</li>
+        </ol>
+        <p>真实调用会记录到「调用日志」，包括方法、路径、状态码、耗时和错误信息。日志只保留最近 200 条。</p>
+        <h3>超时</h3>
+        <p>全局查询超时由 <code>QUERY_TIMEOUT_MS</code> 控制，接口级 <code>0</code> 表示使用全局值。超时返回 HTTP 504 和错误码 <code>DB_QUERY_TIMEOUT</code>。脚本接口默认由 <code>SCRIPT_TIMEOUT_MS</code> 控制，也可在接口选项中覆盖。</p>
+      </section>
+
+      <section id="documentation" class="manual-section">
+        <span class="manual-section-no">10</span>
+        <h2>接口文档与调用</h2>
+        <p>已启用的接口会自动出现在「接口文档」页，也可以直接读取 OpenAPI JSON：</p>
+        <pre class="manual-code"><code>http://127.0.0.1:3000/magic/api/openapi.json</code></pre>
+        <p>OpenAPI 原始地址通常是 <code>/magic/api/openapi.json</code>，生成接口位于 <code>/openapi/*</code>。管理台页面中的 cURL 示例可以直接复制使用。</p>
+        <h3>访问令牌</h3>
+        <ul>
+          <li><code>ADMIN_TOKEN</code> 保护管理接口和 OpenAPI 文档。</li>
+          <li><code>OPENAPI_TOKEN</code> 保护实际运行的接口，请求需带 <code>x-api-token</code> 或 Bearer token。</li>
+          <li>未配置 <code>ADMIN_TOKEN</code> 时，管理接口只允许本机回环地址访问。</li>
+        </ul>
+        <div class="manual-note manual-note-info">
+          <strong>文档同步</strong>
+          <p>接口保存或启停后，OpenAPI 文档会随当前接口状态更新，不需要单独发布步骤。</p>
+        </div>
+      </section>
+
+      <section id="versions" class="manual-section">
+        <span class="manual-section-no">11</span>
+        <h2>版本历史</h2>
+        <p>接口和共享脚本每次保存都会生成一个版本快照。编辑已有接口时，点击「历史版本」可以查看旧版本并恢复。</p>
+        <ul>
+          <li>恢复版本会生成一条新的当前状态记录，不会删除已有历史。</li>
+          <li>适合在改错 SQL、脚本或分组配置后快速回退。</li>
+          <li>版本保存只针对接口定义和脚本内容，不包含调用日志。</li>
+        </ul>
+      </section>
+
+      <section id="troubleshooting" class="manual-section">
+        <span class="manual-section-no">12</span>
+        <h2>常见问题</h2>
+        <div class="manual-faq">
+          <details>
+            <summary>管理页打不开或提示需要访问令牌</summary>
+            <p>检查服务是否启动、访问地址是否为 <code>/magic</code>。如果配置了 <code>ADMIN_TOKEN</code>，点击右上角「访问令牌」填入相同令牌。</p>
+          </details>
+          <details>
+            <summary>数据源连接失败</summary>
+            <p>先确认对应驱动已安装：MySQL 使用 <code>mysql2</code>，Oracle 使用 <code>oracledb</code>。再检查主机、端口、账号、密码和连接方式。Oracle 11g 还需要 Client 库和 Thick 模式。</p>
+          </details>
+          <details>
+            <summary>接口返回 403 或 DATASOURCE_READ_ONLY</summary>
+            <p>当前数据源开启了只读模式，写语句会在进入数据库前被拒绝。需要写入时关闭只读，或改用具有写权限的非只读数据源。</p>
+          </details>
+          <details>
+            <summary>接口返回 504 或 DB_QUERY_TIMEOUT</summary>
+            <p>查询执行超过全局或接口级超时。缩小查询范围、优化 SQL，或在接口选项中调整超时值。</p>
+          </details>
+          <details>
+            <summary>脚本里看不到共享脚本方法</summary>
+            <p>确认共享脚本已启用；补全只解析顶层 <code>return { ... }</code> 中的静态方法。动态生成的对象无法被静态识别，请展开「查看共享脚本代码」手动确认。</p>
+          </details>
+          <details>
+            <summary>分组里没有接口</summary>
+            <p>接口的分组字段留空会进入「默认分组」；填写名称后才进入对应自定义分组。可以在编辑页重新选择或输入分组。</p>
+          </details>
+          <details>
+            <summary>读取 OpenAPI 返回 401 或 403</summary>
+            <p>检查 <code>ADMIN_TOKEN</code> 配置，并在请求中携带有效管理令牌。</p>
+          </details>
+        </div>
+      </section>
+
+      <section id="maintenance" class="manual-section manual-section-final">
+        <span class="manual-section-no">13</span>
+        <h2>维护约定</h2>
+        <p>本页是用户操作说明的真源。项目新增或修改任何功能时，必须同步更新 <code>public/manual.html</code>，并在 <code>ROADMAP.md</code> 记录变更和验证结果。</p>
+        <ul>
+          <li>新增按钮、页面、接口参数或操作流程时，补写对应步骤。</li>
+          <li>修改默认值、限制、错误码或权限规则时，补写新的行为说明。</li>
+          <li>纯内部重构且用户操作不变时，仍需在提交前确认本手册无需变更。</li>
+        </ul>
+        <div class="manual-note manual-note-accent">
+          <strong>开发规则</strong>
+          <p>功能代码和操作说明要一起提交。操作说明缺失的功能，不视为完整交付。</p>
+        </div>
+      </section>
+
+      <footer class="manual-footer">
+        <span>Node Magic API Studio · 操作手册</span>
+        <a href="/magic">返回管理台</a>
+      </footer>
+    </main>
+  </div>
+</body>
+</html>

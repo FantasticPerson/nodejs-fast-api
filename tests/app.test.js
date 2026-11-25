@@ -224,6 +224,13 @@ test('static UI and OpenAPI document are served', async () => {
   const stylesheet = await invoke(harness.app.handler, { url: '/styles.css' });
   assert.equal(stylesheet.statusCode, 200);
   assert.equal(stylesheet.headers['cache-control'], 'no-store');
+  const manual = await invoke(harness.app.handler, { url: '/manual' });
+  assert.equal(manual.statusCode, 200);
+  assert.match(manual.body, /操作手册/);
+  assert.match(manual.body, /快速开始/);
+  assert.equal(manual.headers['cache-control'], 'no-store');
+  const manualStylesheet = await invoke(harness.app.handler, { url: '/manual.css' });
+  assert.equal(manualStylesheet.statusCode, 200);
   const spec = await invoke(harness.app.handler, { url: '/magic/api/openapi.json' });
   assert.equal(spec.statusCode, 200);
   const document = JSON.parse(spec.body);

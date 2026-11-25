@@ -53,6 +53,8 @@ test('management views render without a browser runtime', async () => {
     const html = views.renderApp();
     assert.ok(html.length > 1000, `${view} should render content`);
     assert.match(html, /Node Magic/);
+    assert.match(html, /href="\/manual"/);
+    assert.match(html, /操作手册/);
     assert.match(html, /moon-glyph/);
     assert.match(html, /fill="currentColor"/);
     assert.match(html, /M21 12\.79A9 9 0 1 1 11\.21 3/);

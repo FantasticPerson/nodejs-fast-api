@@ -8,16 +8,19 @@ const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
 test('management styles remain compatible with Chrome 102', async () => {
   const css = await fs.readFile(path.join(rootDir, 'public', 'styles.css'), 'utf8');
+  const manualCss = await fs.readFile(path.join(rootDir, 'public', 'manual.css'), 'utf8');
 
-  for (const pattern of [
-    /color-mix\(/,
-    /:has\(/,
-    /@container\b/,
-    /\boklch\(/,
-    /\blight-dark\(/,
-    /text-wrap:\s*balance/
-  ]) {
-    assert.doesNotMatch(css, pattern);
+  for (const stylesheet of [css, manualCss]) {
+    for (const pattern of [
+      /color-mix\(/,
+      /:has\(/,
+      /@container\b/,
+      /\boklch\(/,
+      /\blight-dark\(/,
+      /text-wrap:\s*balance/
+    ]) {
+      assert.doesNotMatch(stylesheet, pattern);
+    }
   }
 
   assert.match(css, /::selection\s*\{[^}]*background-color:\s*var\(--selection-bg\)/);

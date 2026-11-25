@@ -144,6 +144,11 @@ export function createApplication({
         return;
       }
 
+      if ((req.method === 'GET' || req.method === 'HEAD') && isManualPath(pathname)) {
+        await serveFile(res, path.join(config.publicDir, 'manual.html'), req.method);
+        return;
+      }
+
       if (req.method === 'GET' || req.method === 'HEAD') {
         const filePath = safePublicPath(config.publicDir, pathname);
         if (filePath) {
@@ -455,6 +460,10 @@ function normalizePathname(pathname) {
 
 function isUiPath(pathname) {
   return pathname === '/' || pathname === '/magic' || pathname === '/magic/';
+}
+
+function isManualPath(pathname) {
+  return pathname === '/manual' || pathname === '/manual/';
 }
 
 function safePublicPath(publicDir, pathname) {
